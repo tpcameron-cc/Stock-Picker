@@ -29,8 +29,10 @@ cite every number, and say plainly when data is missing or a skill is underperfo
 | `core/signals.py` | `Signal` pydantic schema (the contract every skill outputs), `save_signals` → JSON + markdown. |
 | `core/universe.py` | Builds the tradable universe: candidates → liquidity filters → risk flags. |
 | `core/indicators.py` | Pure technical indicators (SMA/EMA, ATR, Bollinger, RSI, $vol, RVOL, MA stack, RS, VCP). |
+| `core/fundamentals.py` | Shared fundamental checks: YoY growth, deceleration, estimate revisions, earnings proximity. Missing data = `passed=None`, never a guess. |
+| `scanners/<skill>/` | Python behind each skill (importable, tested). `scanners/breakout/`: `setups.py` (causal features, gates, plans, score), `scan.py`, `backtest.py`, `experiments.py` (exit/entry variants, read-only). |
 | `core/providers/` | One module per data source, each with disk cache (`DiskCache`) + rate limiting (`RateLimiter`). |
-| `.claude/skills/` | One folder per skill (built in later stages). |
+| `.claude/skills/` | One `SKILL.md` per skill; each calls into `scanners/` and `core/`. |
 | `data/cache/` | Provider cache (gitignored). Delete a subfolder to force a refetch. |
 | `reports/` | Dated outputs (`universe-YYYY-MM-DD.csv`, later `YYYY-MM-DD.md/.csv`). |
 | `tests/` | pytest suite. |
@@ -45,6 +47,9 @@ cite every number, and say plainly when data is missing or a skill is underperfo
 - Data gaps become explicit flags (e.g. `"EDGAR check unavailable (...)"`), never silent passes.
   `reject_on_flag` only rejects on real findings, never on gaps.
 - New price sources (Polygon, Alpaca) implement the `PriceProvider` protocol in `core/providers/base.py`.
+- Scanner features must be **causal** (day t uses data <= t). The live scan and the backtest share the same
+  feature/plan code; `tests/test_breakout.py::test_features_are_causal` guards against look-ahead.
+- Skill-specific numbers go in `Signal.metrics` (e.g. pivot, distance_to_pivot, setup).
 
 ## Running
 
@@ -57,6 +62,8 @@ uv run python -m core.universe --source list            # quick: tickers in sett
 uv run python -m core.universe --limit 400              # first 400 exchange-listed stocks
 uv run python -m core.universe                          # full universe (~5,900 candidates; ~15 min cold, cached 12h)
 uv run python -m core.universe --source list --edgar    # + SEC dilutive-filing check (needs SEC_USER_AGENT)
+uv run python -m scanners.breakout.scan --limit 600     # breakout scan (drop --limit for the full universe)
+uv run python -m scanners.breakout.backtest --limit 1500  # 5y backtest on ~300 tickers (~3 min)
 ```
 
 ## Environment variables
@@ -71,7 +78,7 @@ uv run python -m core.universe --source list --edgar    # + SEC dilutive-filing 
 ## Build status
 
 - [x] Stage 1: core (config, Signal schema, universe + filters, indicators, providers: yfinance, Nasdaq Trader, EDGAR), tests
-- [ ] Stage 2: `breakout-scanner` + `backtest.py`
+- [x] Stage 2: `breakout-scanner` + `backtest.py`
 - [ ] Stage 3: `risk-and-sizing` + `journal.py`
 - [ ] Stage 4: `catalyst-plays`
 - [ ] Stage 5: `political-edge` (InsiderCat MCP is connected in Claude Code sessions)
@@ -85,3 +92,12 @@ uv run python -m core.universe --source list --edgar    # + SEC dilutive-filing 
   dilutive SEC filings are flagged.
 - `drop_incomplete_bar` doesn't know about early-close days (1 pm ET); those bars count as partial until 4:20 pm.
 - The universe is today's listings, so any backtest built on it has survivorship bias.
+- Breakout backtest (2026-11-16, 300 tickers, 5y, technical layer only): 514 trades, 36% hit rate,
+  avg gain +10.9% / avg loss -7.0%, expectancy -0.10R (-0.56%/trade), -1.3% vs SPY over the same periods.
+  Pullbacks ~breakeven (+0.01R); breakouts -0.25R; pre-breakouts -0.15R. Fundamentals were not applied.
+  No thresholds have been changed in response; changes need the user's approval.
+- Exit experiments (2026-11-16, `scanners/breakout/experiments.py`, report `reports/experiments-breakout-2026-11-16.md`):
+  12 entry/exit variants on 300 tickers plus a 300-ticker holdout. No variant beat the baseline on both sets; patterns
+  (by setup, by time half, by regime) flipped sign between sets. Baseline mean R 90% CI: main [-0.20, 0.00],
+  holdout [-0.06, +0.16]. Treat the technical layer as roughly breakeven; exits unchanged.
+- Yahoo gives ~5 quarters of revenue, so revenue deceleration is usually "unknown"; EPS uses ~16 quarters.

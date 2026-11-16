@@ -95,6 +95,55 @@ class YFinanceProvider:
                 frames[t] = df.sort_index()
         return frames
 
+    def fundamentals(self, ticker: str) -> dict:
+        """Raw fundamentals for core.fundamentals.evaluate_fundamentals. Each field may be None;
+        `errors` lists what could not be fetched (data gaps are reported, never guessed)."""
+        yf = self._yf()
+
+        def fetch() -> dict:
+            t = yf.Ticker(ticker)
+            out: dict = {"errors": []}
+
+            def grab(name, fn):
+                try:
+                    self.limiter.wait()
+                    out[name] = fn()
+                except Exception as e:
+                    out[name] = None
+                    out["errors"].append(f"{name}: {type(e).__name__}")
+
+            def revenue():
+                q = t.quarterly_income_stmt
+                if q is None or q.empty or "Total Revenue" not in q.index:
+                    return None
+                s = q.loc["Total Revenue"].dropna().astype(float)
+                s.index = pd.to_datetime(s.index)
+                return s.sort_index()
+
+            def eps_reported():
+                ed = t.get_earnings_dates(limit=16)
+                if ed is None or ed.empty:
+                    return None
+                s = ed["Reported EPS"].dropna().astype(float)
+                s.index = pd.to_datetime(s.index, utc=True).tz_convert(None).normalize()
+                return s.sort_index()
+
+            def next_earnings():
+                cal = t.calendar or {}
+                dates = cal.get("Earnings Date") or []
+                future = sorted(d for d in dates if d >= pd.Timestamp.now().date())
+                return future[0] if future else None
+
+            grab("revenue", revenue)
+            grab("eps_reported", eps_reported)
+            grab("eps_revisions", lambda: t.eps_revisions)
+            grab("eps_trend", lambda: t.eps_trend)
+            grab("next_earnings", next_earnings)
+            return out
+
+        item = self.cache.get_or_fetch(f"fundamentals|{ticker.upper()}", 24, fetch)
+        return {**item.value, "fetched_at": item.fetched_at}
+
     def splits(self, ticker: str) -> pd.Series:
         yf = self._yf()
 

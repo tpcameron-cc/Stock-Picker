@@ -60,6 +60,8 @@ class Signal(BaseModel):
     invalidation: str = Field(min_length=1)
     risk_flags: list[str] = Field(default_factory=list)
     sources: list[Source] = Field(min_length=1)
+    # Skill-specific numbers (e.g. pivot, distance_to_pivot, rs_percentile). Optional, shown in reports.
+    metrics: dict[str, float | int | str | None] = Field(default_factory=dict)
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("ticker")
@@ -125,6 +127,10 @@ def signals_to_markdown(signals: list[Signal]) -> str:
         ]
         if s.key_dates:
             lines.append("- **Key dates:** " + "; ".join(f"{k.date} {k.kind}" for k in s.key_dates))
+        if s.metrics:
+            def _fmt(v):
+                return f"{v:.4g}" if isinstance(v, float) else str(v)
+            lines.append("- **Metrics:** " + ", ".join(f"{k} {_fmt(v)}" for k, v in s.metrics.items()))
         if s.risk_flags:
             lines.append("- **Risk flags:** " + ", ".join(s.risk_flags))
         lines.append("- **Sources:** " + "; ".join(f"[{src.url.host}]({src.url}) as of {src.as_of}" for src in s.sources))

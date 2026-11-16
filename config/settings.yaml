@@ -24,7 +24,7 @@ universe:
   # Case-insensitive regex on the security name. Drops non-common-stock instruments
   # (SPAC warrants/rights/units, preferreds, notes). ADRs are kept.
   exclude_name_regex: '\b(?:warrants?|rights?|units?|preferred|depositary shares? representing|notes? due|debentures?)\b'
-  history_period: 1y             # price history to pull per ticker for filters/indicators
+  history_period: 2y             # price history per ticker; 2y so SMA200 and 52w RS highs are valid
   download_batch_size: 200       # tickers per yfinance batch download
 
 filters:
@@ -82,3 +82,80 @@ indicators:
 signals:
   score_min: 0
   score_max: 100
+
+# ---------------------------------------------------------------------------
+# Skill 2: breakout-scanner
+# ---------------------------------------------------------------------------
+breakout:
+  # Gates every idea must pass before setups are even scored ("leaders only").
+  require_ma_stack: true         # SMA50 > SMA150 > SMA200 and close > SMA50
+  rs_min_percentile: 80          # 63-day excess return vs SPY must be in the top 20% of the universe
+  near_high_max_pct: 0.25        # close within 25% of the 52-week high (base setups use the tighter value below)
+
+  base:
+    length_days: 25              # lookback that defines the base / pivot (excludes today)
+    near_high_max_pct: 0.15      # base setups: close within 15% of the 52-week high
+    flat_max_depth: 0.15         # flat base: (base high / base low - 1) <= 15%
+    squeeze_bw_percentile: 20    # Bollinger bandwidth in its lowest 20% of the last 126 days -> squeeze
+    squeeze_atr_ratio: 0.6       # or ATR% <= 60% of its 60-day max -> squeeze
+    vcp_segment_days: 10         # VCP: three consecutive 10-day segments...
+    vcp_max_final_depth: 0.08    # ...each shallower than the last, final one <= 8% deep
+    cup_min_days: 35             # cup-with-handle (heuristic): cup length range in days
+    cup_max_days: 130
+    cup_min_depth: 0.12          # cup depth from left lip, 12%–35%
+    cup_max_depth: 0.35
+    cup_lip_tolerance: 0.05      # right side recovers to within 5% of the left lip
+    handle_max_days: 20          # handle: last 5–20 days, pullback <= 12%, on lighter volume
+    handle_min_days: 5
+    handle_max_depth: 0.12
+    handle_min_cup_position: 0.5 # handle low must sit in the upper half of the cup (0 = bottom, 1 = lip)
+
+  breakout_day:
+    rvol_min: 1.5                # volume >= 1.5x the prior 50-day average
+    close_in_range_min: 0.5      # close in the upper half of the day's range
+
+  rs_new_high_tolerance: 0.01    # RS line within 1% of its 252-day high counts as a new high
+
+  pullback:
+    ma_touch_tolerance: 0.02     # low within 2% of the rising EMA21 or SMA50, close above it
+    ma_rising_lookback: 5        # MA higher than 5 days ago = rising
+
+  plan:
+    buy_zone_pct: 0.05           # entry zone = pivot to pivot +5%; above that = extended (rejected)
+    max_distance_to_pivot: 0.05  # pre-breakout ideas must be within 5% below the pivot
+    atr_stop_mult: 2.0           # ATR stop = entry low - 2 ATR; stop used = the tighter of this and the base low
+    max_stop_pct: 0.10           # reject if the stop is more than 10% below entry
+    pullback_atr_stop_mult: 1.0  # pullbacks: stop = MA - 1 ATR
+    horizon_days: 30             # time stop for the plan (trading days)
+    fallback_target_r: 2.0       # if the measured move / prior high isn't above the entry zone, target = 2R (labeled)
+
+  scoring:                       # points per condition; total is capped at 100
+    ma_stack: 15
+    rs_percentile_max: 20        # scaled linearly from rs_min_percentile (0 pts) to 100th (max)
+    rs_new_high: 10
+    squeeze: 10
+    vcp: 10
+    flat_base: 10
+    cup_handle: 10
+    breakout_day: 15
+    pullback: 10
+    fundamentals_pass: 10
+    min_score: 40                # ideas below this are dropped (listed in rejects)
+
+  fundamentals:
+    shortlist_size: 40           # only the top-N technical candidates get (slow) fundamental checks
+    max_decel_pp: 25             # "slowing sharply" = YoY growth down more than 25 percentage points...
+    strong_growth_floor: 0.50    # ...unless growth is still >= 50% YoY (300% -> 150% is not a problem)
+    revision_tolerance: 0.02     # EPS estimate down >2% vs 30 days ago = revisions falling
+    earnings_exclusion_days: 5   # earnings within 5 trading days -> excluded, handed to catalyst-plays
+
+  output_top_n: 25
+  history_period: 2y
+
+  backtest:
+    period: 5y
+    max_tickers: 300             # backtest on the first N tickers of the current universe (survivorship bias!)
+    signal_step_days: 5          # evaluate signals every 5 trading days
+    pending_days: 5              # buy-stop at the pivot stays live this many days
+    same_bar_rule: stop_first    # if stop and target are both hit on one bar, assume the stop (conservative)
+    slippage_pct: 0.001          # 0.10% cost applied on entry and on exit

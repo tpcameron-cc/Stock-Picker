@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 class UniverseResult:
     table: pd.DataFrame                       # one row per candidate, passed + rejected
     sources: list[dict] = field(default_factory=list)  # {name, url, as_of}
+    histories: dict[str, pd.DataFrame] = field(default_factory=dict, repr=False)  # reuse; avoids refetch
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
@@ -194,7 +195,7 @@ def build_universe(cfg: Settings | None = None, source: str | None = None, limit
     if use_edgar:
         sources.append({"name": "SEC EDGAR filings", "url": "https://www.sec.gov/edgar/search/",
                         "as_of": date.today().isoformat()})
-    return UniverseResult(table=table, sources=sources)
+    return UniverseResult(table=table, sources=sources, histories=histories)
 
 
 def main(argv: list[str] | None = None) -> None:

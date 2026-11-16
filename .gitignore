@@ -4,3 +4,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .env
+
+# Generated outputs (regenerable). Keep decision write-ups.
+reports/*
+!reports/.gitkeep
+!reports/experiments-*.md
