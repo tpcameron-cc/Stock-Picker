@@ -9,3 +9,7 @@ __pycache__/
 reports/*
 !reports/.gitkeep
 !reports/experiments-*.md
+
+# Personal data
+config/local.yaml
+data/*.sqlite

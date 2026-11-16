@@ -1,11 +1,11 @@
 import pytest
 
-from core.config import load_settings
+from core.config import DEFAULT_SETTINGS, load_settings
 from core.providers.base import DiskCache
 
 
 def test_settings_load_and_dotted_access():
-    s = load_settings()
+    s = load_settings(DEFAULT_SETTINGS)
     assert s.get("filters.min_price") == 3.0
     assert s.get("filters.min_avg_dollar_volume") == 10_000_000
     assert s.get("nope.missing", None) is None
@@ -14,7 +14,7 @@ def test_settings_load_and_dotted_access():
 
 
 def test_env_resolution(monkeypatch):
-    s = load_settings()
+    s = load_settings(DEFAULT_SETTINGS)
     monkeypatch.delenv("SEC_USER_AGENT", raising=False)
     assert s.env("providers.edgar.user_agent_env") is None
     monkeypatch.setenv("SEC_USER_AGENT", "stock-picker test@example.com")
@@ -31,7 +31,7 @@ def test_no_secrets_in_settings_file():
             yield path, node
 
     sensitive = ("key", "secret", "token", "password", "user_agent")
-    for path, value in walk(load_settings().raw):
+    for path, value in walk(load_settings(DEFAULT_SETTINGS).raw):
         leaf = path.rsplit(".", 1)[-1].lower()
         if any(word in leaf for word in sensitive):
             assert leaf.endswith("_env"), f"{path} should name an env var (use {leaf}_env)"

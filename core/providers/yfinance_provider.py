@@ -144,6 +144,22 @@ class YFinanceProvider:
         item = self.cache.get_or_fetch(f"fundamentals|{ticker.upper()}", 24, fetch)
         return {**item.value, "fetched_at": item.fetched_at}
 
+    def sector(self, ticker: str) -> str | None:
+        """GICS-style sector from Yahoo profile data; None if unavailable. Cached 7 days."""
+        key = f"sector|{ticker.upper()}"
+        hit = self.cache.get(key, 24 * 7)
+        if hit is not None:
+            return hit.value
+        yf = self._yf()
+        self.limiter.wait()
+        try:
+            sector = (yf.Ticker(ticker).info or {}).get("sector") or None
+        except Exception:
+            return None                      # transient failure: don't cache, try again next time
+        if sector:
+            self.cache.put(key, sector)
+        return sector
+
     def splits(self, ticker: str) -> pd.Series:
         yf = self._yf()
 

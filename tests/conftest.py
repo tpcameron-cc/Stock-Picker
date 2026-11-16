@@ -2,12 +2,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from core.config import load_settings
+from core.config import DEFAULT_SETTINGS, load_settings
 
 
 @pytest.fixture
 def cfg(tmp_path):
-    s = load_settings()
+    s = load_settings(DEFAULT_SETTINGS)
     s.raw["paths"]["cache_dir"] = str(tmp_path / "cache")
     return s
 

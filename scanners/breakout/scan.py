@@ -126,6 +126,10 @@ def build_signal(c: dict, fr: FundamentalResult | None, cfg: Settings, price_as_
 
     metrics = {
         "setup": plan.setup,
+        "price_as_of": price_as_of.isoformat(),
+        # How the journal / backtest should fill this plan (see core.simulate.entry_mode)
+        "entry_mode": "buy_stop" if plan.setup == "pre_breakout" else "next_open",
+        "cancel_below": round(plan.cancel_below, 2) if plan.cancel_below else None,
         "pivot": round(plan.pivot, 2) if plan.pivot else None,
         "distance_to_pivot": round(plan.distance_to_pivot, 4) if plan.distance_to_pivot is not None else None,
         "rs_percentile": round(c["rs_pct"], 1),

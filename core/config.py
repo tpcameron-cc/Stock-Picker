@@ -53,11 +53,43 @@ class Settings:
         return self._data
 
 
-def load_settings(path: str | Path | None = None) -> Settings:
+LOCAL_SETTINGS = PROJECT_ROOT / "config" / "local.yaml"   # gitignored personal overrides
+
+
+def _deep_merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _deep_merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def load_settings(path: str | Path | None = None, local_path: str | Path | None = None) -> Settings:
+    """Load settings.yaml, then overlay config/local.yaml if it exists (only for the default settings file)."""
     p = Path(path) if path else DEFAULT_SETTINGS
     with open(p, encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
+    lp = Path(local_path) if local_path else (LOCAL_SETTINGS if path is None else None)
+    if lp is not None and lp.exists():
+        with open(lp, encoding="utf-8") as fh:
+            data = _deep_merge(data, yaml.safe_load(fh) or {})
     return Settings(data, p)
+
+
+def set_local(dotted: str, value: Any, local_path: str | Path | None = None) -> Path:
+    """Persist one value into config/local.yaml (created if missing). Used for personal settings."""
+    lp = Path(local_path) if local_path else LOCAL_SETTINGS
+    data: dict = {}
+    if lp.exists():
+        data = yaml.safe_load(lp.read_text(encoding="utf-8")) or {}
+    node = data
+    parts = dotted.split(".")
+    for part in parts[:-1]:
+        node = node.setdefault(part, {})
+    node[parts[-1]] = value
+    lp.write_text("# Personal overrides of settings.yaml. Gitignored: never commit this file.\n"
+                  + yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    settings.cache_clear()
+    return lp
 
 
 @lru_cache(maxsize=1)

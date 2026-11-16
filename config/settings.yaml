@@ -3,12 +3,40 @@
 # API keys are NEVER written here: each key field names an environment variable.
 
 account:
-  # Account size in USD for risk-and-sizing. null = ask once, then store here.
+  # Account size in USD for risk-and-sizing. Leave null here: it is asked once and stored in
+  # config/local.yaml (gitignored, overrides this file) so personal numbers never reach git.
+  #   uv run python -m core.risk --set-account 50000
   size_usd: null
 
 paths:
   cache_dir: data/cache          # gitignored on-disk cache for provider responses
   reports_dir: reports           # dated markdown + CSV outputs
+  journal: data/journal.sqlite   # paper-trade journal (gitignored; back it up if you care about the history)
+
+# ---------------------------------------------------------------------------
+# Skill 5: risk-and-sizing (paper sizing only; nothing here places orders)
+# ---------------------------------------------------------------------------
+risk:
+  risk_per_trade_pct: 0.0075     # risk 0.75% of the account per idea (entry -> stop distance)
+  entry_for_sizing: high         # size from the top of the entry zone (worst fill) | mid
+  max_position_pct: 0.20         # cap any one position at 20% of the account, even if the stop is tight
+  min_shares: 1                  # below this the idea is too small to take
+  min_reward_risk: 2.0           # reject ideas below 2:1 (target vs stop, from the middle of the entry zone)
+  max_open_positions: 8          # open + pending paper trades in the journal count toward this
+  max_per_sector: 2              # at most 2 positions per sector (unknown sector = flagged, not capped)
+  correlation_lookback_days: 60  # daily-return correlation window vs existing positions
+  max_correlation: 0.75          # above this, the idea duplicates an existing bet...
+  correlation_action: reject     # ...reject | flag
+  size_multiplier: 1.0           # orchestrator lowers this in a weak market regime
+
+# ---------------------------------------------------------------------------
+# Paper-trade journal
+# ---------------------------------------------------------------------------
+journal:
+  pending_days: 5                # a buy-stop / next-open entry that hasn't filled after 5 bars expires
+  same_bar_rule: stop_first      # same conservative fill rules as the backtest
+  slippage_pct: 0.001            # 0.10% per side, same as the backtest
+  log_rejected: true             # also track ideas risk-and-sizing rejected (taken = 0) to test the filters
 
 universe:
   # Where the candidate ticker list comes from:

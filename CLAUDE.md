@@ -29,11 +29,16 @@ cite every number, and say plainly when data is missing or a skill is underperfo
 | `core/signals.py` | `Signal` pydantic schema (the contract every skill outputs), `save_signals` → JSON + markdown. |
 | `core/universe.py` | Builds the tradable universe: candidates → liquidity filters → risk flags. |
 | `core/indicators.py` | Pure technical indicators (SMA/EMA, ATR, Bollinger, RSI, $vol, RVOL, MA stack, RS, VCP). |
+| `core/simulate.py` | Shared trade simulator (entry fills, stops, targets, time stops, optional trailing exits). Used by the backtest AND the journal so both apply identical rules. |
+| `core/risk.py` | risk-and-sizing: fixed-% risk sizing, position cap, 2:1 min R:R, max positions, sector cap, correlation check. CLI sizes Signal JSON files and can log them. |
+| `core/journal.py` | Paper-trade journal (SQLite `data/journal.sqlite`, table `paper_trades`): log ideas, mark outcomes, stats per skill / setup / signal. |
+| `config/local.yaml` | **Gitignored** personal overrides (account size). Merged over `settings.yaml` by `settings()`. |
 | `core/fundamentals.py` | Shared fundamental checks: YoY growth, deceleration, estimate revisions, earnings proximity. Missing data = `passed=None`, never a guess. |
 | `scanners/<skill>/` | Python behind each skill (importable, tested). `scanners/breakout/`: `setups.py` (causal features, gates, plans, score), `scan.py`, `backtest.py`, `experiments.py` (exit/entry variants, read-only). |
 | `core/providers/` | One module per data source, each with disk cache (`DiskCache`) + rate limiting (`RateLimiter`). |
 | `.claude/skills/` | One `SKILL.md` per skill; each calls into `scanners/` and `core/`. |
 | `data/cache/` | Provider cache (gitignored). Delete a subfolder to force a refetch. |
+| `data/journal.sqlite` | Paper-trade history (gitignored). Back it up; it is the only record of paper results. |
 | `reports/` | Dated outputs (`universe-YYYY-MM-DD.csv`, later `YYYY-MM-DD.md/.csv`). |
 | `tests/` | pytest suite. |
 
@@ -49,7 +54,11 @@ cite every number, and say plainly when data is missing or a skill is underperfo
 - New price sources (Polygon, Alpaca) implement the `PriceProvider` protocol in `core/providers/base.py`.
 - Scanner features must be **causal** (day t uses data <= t). The live scan and the backtest share the same
   feature/plan code; `tests/test_breakout.py::test_features_are_causal` guards against look-ahead.
-- Skill-specific numbers go in `Signal.metrics` (e.g. pivot, distance_to_pivot, setup).
+- Skill-specific numbers go in `Signal.metrics` (e.g. pivot, distance_to_pivot, setup). For the journal every
+  skill should also set `price_as_of`, `entry_mode` (`buy_stop` | `next_open`) and, if relevant, `cancel_below`.
+- Personal values (account size) live in `config/local.yaml`, never in `settings.yaml`. Tests load
+  `settings.yaml` explicitly (`load_settings(DEFAULT_SETTINGS)`) so they never see personal overrides.
+- Journal outcomes are recomputed from prices until final; logging is idempotent per (signal_date, ticker, skill).
 
 ## Running
 
@@ -64,6 +73,9 @@ uv run python -m core.universe                          # full universe (~5,900 
 uv run python -m core.universe --source list --edgar    # + SEC dilutive-filing check (needs SEC_USER_AGENT)
 uv run python -m scanners.breakout.scan --limit 600     # breakout scan (drop --limit for the full universe)
 uv run python -m scanners.breakout.backtest --limit 1500  # 5y backtest on ~300 tickers (~3 min)
+uv run python -m core.risk --set-account 5000           # stored in config/local.yaml (gitignored)
+uv run python -m core.risk --signals reports/breakout-YYYY-MM-DD.json --log   # size + journal
+uv run python -m core.journal update|list|summary       # paper-trade outcomes and stats
 ```
 
 ## Environment variables
@@ -79,7 +91,7 @@ uv run python -m scanners.breakout.backtest --limit 1500  # 5y backtest on ~300 
 
 - [x] Stage 1: core (config, Signal schema, universe + filters, indicators, providers: yfinance, Nasdaq Trader, EDGAR), tests
 - [x] Stage 2: `breakout-scanner` + `backtest.py`
-- [ ] Stage 3: `risk-and-sizing` + `journal.py`
+- [x] Stage 3: `risk-and-sizing` + `journal.py` (+ `core/simulate.py` shared by backtest and journal)
 - [ ] Stage 4: `catalyst-plays`
 - [ ] Stage 5: `political-edge` (InsiderCat MCP is connected in Claude Code sessions)
 - [ ] Stage 6: `momentum-hype`

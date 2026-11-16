@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from core.config import load_settings
+from core.config import DEFAULT_SETTINGS, load_settings
 from scanners.breakout.backtest import simulate_trade, summarize
 from scanners.breakout.setups import (
     Plan, compute_features, detect_cup_handle, make_plan, passes_gates, technical_score,
@@ -11,7 +11,7 @@ from scanners.breakout.setups import (
 
 @pytest.fixture
 def b():
-    return load_settings().section("breakout")
+    return load_settings(DEFAULT_SETTINGS).section("breakout")
 
 
 def frame(closes, volume=1_000_000, spread=0.01):
