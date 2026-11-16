@@ -1,0 +1,84 @@
+# stock-picker settings
+# Every tunable number lives here, not in code. Values are read by core/config.py.
+# API keys are NEVER written here: each key field names an environment variable.
+
+account:
+  # Account size in USD for risk-and-sizing. null = ask once, then store here.
+  size_usd: null
+
+paths:
+  cache_dir: data/cache          # gitignored on-disk cache for provider responses
+  reports_dir: reports           # dated markdown + CSV outputs
+
+universe:
+  # Where the candidate ticker list comes from:
+  #   nasdaqtrader -> every Nasdaq/NYSE/NYSE American/Arca/Cboe-listed common stock
+  #                   (public Nasdaq Trader symbol directory; OTC is never in it)
+  #   list         -> only the tickers in `tickers` below (fast; good for testing)
+  source: nasdaqtrader
+  tickers: [AAPL, MSFT, NVDA, AMZN, META, GOOGL, LMT, RTX, PLTR, JPM]
+  exclude_etfs: true             # drop ETFs/ETNs from the nasdaqtrader list
+  exclude_test_issues: true      # Nasdaq Trader marks test symbols; always drop them
+  # Symbols with these characters are usually warrants, units, rights or preferreds.
+  exclude_symbol_chars: ["$", ".", "+", "^", "="]
+  # Case-insensitive regex on the security name. Drops non-common-stock instruments
+  # (SPAC warrants/rights/units, preferreds, notes). ADRs are kept.
+  exclude_name_regex: '\b(?:warrants?|rights?|units?|preferred|depositary shares? representing|notes? due|debentures?)\b'
+  history_period: 1y             # price history to pull per ticker for filters/indicators
+  download_batch_size: 200       # tickers per yfinance batch download
+
+filters:
+  min_price: 3.0                 # USD, last close
+  min_avg_dollar_volume: 10000000  # USD, average of close*volume over the window below
+  avg_dollar_volume_window: 20   # trading days
+  min_history_days: 60           # need at least this many bars to compute anything
+  allowed_exchanges:             # Nasdaq Trader exchange codes; anything else (incl. OTC) is rejected
+    - Q   # Nasdaq (Global Select / Global / Capital Market)
+    - N   # NYSE
+    - A   # NYSE American
+    - P   # NYSE Arca
+    - Z   # Cboe BZX
+    - V   # IEX
+
+risk_flags:
+  # Dilution / pump-and-dump warnings. These FLAG, they do not reject, unless reject_on_flag is true.
+  reverse_split_lookback_days: 365     # reverse split within this window -> flag
+  dilutive_filing_lookback_days: 180   # S-1/S-3/ATM prospectus within this window -> flag
+  dilutive_forms: ["S-1", "S-1/A", "S-3", "S-3/A", "S-3ASR", "424B5", "F-1", "F-3"]
+  # 424B5 is the prospectus supplement typically used for at-the-market (ATM) offerings.
+  reject_on_flag: false
+  check_edgar_in_universe: false       # EDGAR lookups are 1 request/ticker; run on shortlist only by default
+
+providers:
+  yfinance:
+    cache_ttl_hours: 12          # price history refresh interval
+    min_seconds_between_calls: 0.5
+    drop_incomplete_bar: true    # ignore today's bar if fetched before the close (it's partial)
+    close_buffer_minutes: 20     # minutes after 16:00 ET before today's bar counts as final
+  nasdaqtrader:
+    cache_ttl_hours: 24
+  edgar:
+    cache_ttl_hours: 24
+    min_seconds_between_calls: 0.15   # SEC fair-access limit is 10 req/s; stay under it
+    # SEC requires a User-Agent with a contact. Set this env var, e.g. "stock-picker you@example.com"
+    user_agent_env: SEC_USER_AGENT
+  # Optional paid / keyed providers (later stages). Each names an env var, never the key itself.
+  polygon:
+    api_key_env: POLYGON_API_KEY
+  alpaca:
+    api_key_env: ALPACA_API_KEY
+    secret_key_env: ALPACA_SECRET_KEY
+  quiver:
+    api_key_env: QUIVER_API_KEY
+
+indicators:
+  atr_period: 14
+  bollinger_period: 20
+  bollinger_std: 2.0
+  rsi_period: 14
+  rs_lookback_days: 63           # ~3 months for relative-strength vs benchmark
+  benchmark: SPY
+
+signals:
+  score_min: 0
+  score_max: 100
