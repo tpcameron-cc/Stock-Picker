@@ -14,6 +14,67 @@ paths:
   journal: data/journal.sqlite   # paper-trade journal (gitignored; back it up if you care about the history)
 
 # ---------------------------------------------------------------------------
+# Skill 4: catalyst-plays
+# ---------------------------------------------------------------------------
+catalyst:
+  lookahead_days: 21             # calendar days ahead to look for earnings ("next 3 weeks")
+  lookback_trading_days: 10      # drift scan: reported within the last 10 trading days
+  max_candidates: 120            # most liquid N reporters per list; drift names are pre-filtered on price first
+  history_period: 5y             # price history for past earnings reactions
+  history_quarters: 12           # quarters of earnings history scored
+  min_history_quarters: 6        # fewer usable quarters -> no play (watch only, low confidence)
+  runup_window_days: 10          # pre-earnings run-up: close 10 sessions before -> close before the report
+  drift_window_days: 20          # post-earnings drift: reaction-day close -> 20 sessions later
+
+  scoring:                       # points; total capped at 100
+    beat_history: 30             # beat rate scaled from 50% (0 pts) to 100% (max)
+    revisions: 20                # estimates rising into the report = max; flat = half; falling = 0
+    implied_vs_actual: 20        # implied move cheap vs typical actual move = max; fair = half; rich = 0
+    drift_history: 15            # avg 20-day drift after beats, scaled to +5% = max
+    runup_history: 15            # run-up hit rate scaled from 50% (0) to 100% (max)
+    negative_catalyst_penalty: 15  # per negative flag (lockup expiry, recent offering)
+    min_score: 45
+
+  revisions_tolerance: 0.01      # 30-day change in the current-quarter EPS estimate beyond +-1% = up/down
+
+  play:
+    entry_zone_pct: 0.01         # entry zone = last close +-1%
+    runup_min_hit_rate: 0.65     # run-up play: stock rose into >= 65% of past reports...
+    runup_min_avg: 0.02          # ...by >= 2% on average
+    runup_min_days: 3            # need at least 3 sessions left before the exit day
+    runup_atr_stop_mult: 1.5     # run-up stop = close - 1.5 ATR
+    hold_min_beat_rate: 0.75     # hold-through play: beat >= 75% of the time...
+    hold_requires_revisions_up: true   # ...with estimates rising...
+    cheap_implied_ratio: 0.8     # ...and implied move <= 80% of the average actual move ("cheap")
+    rich_implied_ratio: 1.2      # implied move >= 120% of the average actual move = "rich"
+    hold_stop_implied_mult: 1.0  # hold-through stop = close x (1 - implied move); gaps can blow through it
+    hold_days_after_report: 3    # hold-through plans end 3 sessions after the reaction day
+
+  drift:
+    big_beat_pct: 5.0            # EPS surprise >= 5%
+    min_gap_pct: 0.03            # reaction-day open >= 3% above the prior close
+    min_rvol: 2.0                # reaction-day volume >= 2x the prior 50-day average
+    guidance_proxy_min_change: 0.01  # current-FY or next-Q EPS estimate up >= 1% in 30d (proxy for raised guidance)
+    require_guidance_proxy: true # reject if estimates FELL after the report; unknown = allowed, low confidence
+    entry_zone_pct: 0.02         # entry zone = last close +-2%
+    max_stop_pct: 0.12           # stop = reaction-day low; reject if more than 12% below entry
+    target_r: 2.0                # target = 2R (drift has no natural measured target; labeled)
+    min_horizon_days: 5
+    scoring: {beat: 25, gap: 20, rvol: 15, guidance: 20, holding: 20}
+
+  options:
+    max_spread_pct: 0.25         # straddle bid/ask spread above 25% of mid -> implied move flagged unreliable
+    baseline_vol_days: 60        # realized daily vol removed from the straddle to isolate the earnings move
+
+  negative:
+    lockup_days: 180             # IPO lockup estimated at first trade date + 180 days (convention, not filed date)
+    lockup_warn_days: 30         # flag if the estimated expiry is within the next 30 days...
+    lockup_recent_days: 5        # ...or passed within the last 5 days
+    offering_lookback_days: 90   # S-1/S-3/424B5 filed in the last 90 days -> flag (needs SEC_USER_AGENT)
+
+  output_top_n: 20
+
+# ---------------------------------------------------------------------------
 # Skill 5: risk-and-sizing (paper sizing only; nothing here places orders)
 # ---------------------------------------------------------------------------
 risk:
@@ -22,6 +83,10 @@ risk:
   max_position_pct: 0.20         # cap any one position at 20% of the account, even if the stop is tight
   min_shares: 1                  # below this the idea is too small to take
   min_reward_risk: 2.0           # reject ideas below 2:1 (target vs stop, from the middle of the entry zone)
+  # Earnings plays whose target is a typical earnings move can't reach 2:1 by construction (decided 2026-11-16):
+  # they skip the R:R rule, qualify on historical odds (catalyst play rules), and are sized smaller.
+  rr_exempt_setups: [earnings_run_up, earnings_hold_through]
+  rr_exempt_size_multiplier: 0.5 # exempt ideas risk half the normal amount (0.375% of the account)
   max_open_positions: 8          # open + pending paper trades in the journal count toward this
   max_per_sector: 2              # at most 2 positions per sector (unknown sector = flagged, not capped)
   correlation_lookback_days: 60  # daily-return correlation window vs existing positions

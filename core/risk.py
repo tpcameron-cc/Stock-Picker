@@ -96,7 +96,15 @@ def size_signals(signals: Iterable[Signal], cfg: Settings, existing: list[dict] 
         d = SizingDecision(ticker=s.ticker, skill=s.skill, score=s.score, approved=False,
                            reward_risk=round(s.reward_risk, 2), entry_price=round(entry, 2), stop=s.stop)
 
-        if s.reward_risk < float(r["min_reward_risk"]):
+        # Earnings plays whose targets are typical earnings moves can't reach 2:1 by construction; they qualify
+        # on their historical odds (enforced by the catalyst skill's play rules) and are sized smaller instead.
+        setup = str(s.metrics.get("setup") or "")
+        exempt = setup in set(r.get("rr_exempt_setups") or [])
+        idea_mult = multiplier * (float(r["rr_exempt_size_multiplier"]) if exempt else 1.0)
+        if exempt:
+            d.flags.append(f"R:R rule exempt ({setup}, R:R {s.reward_risk:.2f}): qualified on historical odds, "
+                           f"sized at {float(r['rr_exempt_size_multiplier']):.0%}")
+        elif round(s.reward_risk, 2) < float(r["min_reward_risk"]):   # cents rounding can't fail an exact 2R plan
             d.reasons.append(f"R:R {s.reward_risk:.2f} < {float(r['min_reward_risk']):g}")
         if any(p["ticker"] == s.ticker for p in book):
             d.reasons.append("already in the book (open or pending)")
@@ -124,7 +132,7 @@ def size_signals(signals: Iterable[Signal], cfg: Settings, existing: list[dict] 
 
         if account:
             shares, capped = position_size(float(account), float(r["risk_per_trade_pct"]), entry, s.stop,
-                                           float(r["max_position_pct"]), multiplier)
+                                           float(r["max_position_pct"]), idea_mult)
             d.shares = shares
             d.notional = round(shares * entry, 2)
             d.risk_usd = round(shares * (entry - s.stop), 2)

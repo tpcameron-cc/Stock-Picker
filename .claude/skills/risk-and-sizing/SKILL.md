@@ -31,6 +31,8 @@ under `risk:` and `journal:`.
    Use `--multiplier 0.5` when the market regime is weak (the orchestrator decides this).
 3. Present: approved ideas with shares, notional, $ risk and % of account; rejected ideas with the reason;
    flags (unknown sector, unchecked correlation, size capped by the position limit).
+   Earnings run-up / hold-through plays (`risk.rr_exempt_setups`) skip the 2:1 rule and are sized at 50%
+   (user decision 2026-11-16); say so when presenting them, with their actual R:R.
 4. **Journal** (paper trades only):
    ```bash
    uv run python -m core.journal update     # mark stop hit / target hit / time stop / expired from daily prices

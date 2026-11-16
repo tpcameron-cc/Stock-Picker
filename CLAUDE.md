@@ -34,8 +34,8 @@ cite every number, and say plainly when data is missing or a skill is underperfo
 | `core/journal.py` | Paper-trade journal (SQLite `data/journal.sqlite`, table `paper_trades`): log ideas, mark outcomes, stats per skill / setup / signal. |
 | `config/local.yaml` | **Gitignored** personal overrides (account size). Merged over `settings.yaml` by `settings()`. |
 | `core/fundamentals.py` | Shared fundamental checks: YoY growth, deceleration, estimate revisions, earnings proximity. Missing data = `passed=None`, never a guess. |
-| `scanners/<skill>/` | Python behind each skill (importable, tested). `scanners/breakout/`: `setups.py` (causal features, gates, plans, score), `scan.py`, `backtest.py`, `experiments.py` (exit/entry variants, read-only). |
-| `core/providers/` | One module per data source, each with disk cache (`DiskCache`) + rate limiting (`RateLimiter`). |
+| `scanners/<skill>/` | Python behind each skill (importable, tested). `scanners/breakout/`: `setups.py` (causal features, gates, plans, score), `scan.py`, `backtest.py`, `experiments.py` (exit/entry variants, read-only). `scanners/catalyst/`: `history.py` (past earnings reactions), `plays.py` (scores, plays, plans, drift, lockups), `scan.py`. |
+| `core/providers/` | One module per data source, each with disk cache (`DiskCache`) + rate limiting (`RateLimiter`). `earnings_calendar.py` = Nasdaq earnings calendar; yfinance provider also has `earnings_history`, `implied_move`, `estimates`, `profile`. |
 | `.claude/skills/` | One `SKILL.md` per skill; each calls into `scanners/` and `core/`. |
 | `data/cache/` | Provider cache (gitignored). Delete a subfolder to force a refetch. |
 | `data/journal.sqlite` | Paper-trade history (gitignored). Back it up; it is the only record of paper results. |
@@ -76,6 +76,7 @@ uv run python -m scanners.breakout.backtest --limit 1500  # 5y backtest on ~300 
 uv run python -m core.risk --set-account 5000           # stored in config/local.yaml (gitignored)
 uv run python -m core.risk --signals reports/breakout-YYYY-MM-DD.json --log   # size + journal
 uv run python -m core.journal update|list|summary       # paper-trade outcomes and stats
+uv run python -m scanners.catalyst.scan                 # earnings plays + drift (~10 min cold, seconds when cached)
 ```
 
 ## Environment variables
@@ -92,7 +93,7 @@ uv run python -m core.journal update|list|summary       # paper-trade outcomes a
 - [x] Stage 1: core (config, Signal schema, universe + filters, indicators, providers: yfinance, Nasdaq Trader, EDGAR), tests
 - [x] Stage 2: `breakout-scanner` + `backtest.py`
 - [x] Stage 3: `risk-and-sizing` + `journal.py` (+ `core/simulate.py` shared by backtest and journal)
-- [ ] Stage 4: `catalyst-plays`
+- [x] Stage 4: `catalyst-plays` (earnings plays, post-earnings drift, lockup / offering flags)
 - [ ] Stage 5: `political-edge` (InsiderCat MCP is connected in Claude Code sessions)
 - [ ] Stage 6: `momentum-hype`
 - [ ] Stage 7: `run-all-scans` (+ `regime.py`) and `review-performance`
@@ -113,3 +114,14 @@ uv run python -m core.journal update|list|summary       # paper-trade outcomes a
   (by setup, by time half, by regime) flipped sign between sets. Baseline mean R 90% CI: main [-0.20, 0.00],
   holdout [-0.06, +0.16]. Treat the technical layer as roughly breakeven; exits unchanged.
 - Yahoo gives ~5 quarters of revenue, so revenue deceleration is usually "unknown"; EPS uses ~16 quarters.
+- catalyst-plays (2026-11-16): run-up and hold-through plays structurally fail the 2:1 R:R rule (targets are
+  typical earnings moves, about the size of the risk; observed R:R 0.4–0.9). **User decision 2026-11-16:** exempt
+  them (`risk.rr_exempt_setups`) — they qualify on historical odds via the catalyst play rules and are sized at
+  50% (`risk.rr_exempt_size_multiplier`). Post-earnings-drift entries still need 2:1. Hold-through stops can be
+  gapped through, so realized losses can exceed the planned (already halved) risk.
+- catalyst-plays coverage gaps: no FDA PDUFA/AdComm dates, index additions, investor days or product launches
+  (no free structured source); federal contracts belong to political-edge. "Guidance" is a proxy (forward
+  estimates up after the report). Lockups are estimated as first trade + 180 days. Offering checks need SEC_USER_AGENT.
+- Implied earnings move = ATM straddle with 60-day realized daily variance removed for the other sessions to
+  expiry (`plays.event_implied_move`). Session counts use weekdays and ignore exchange holidays (e.g. Thanksgiving).
+

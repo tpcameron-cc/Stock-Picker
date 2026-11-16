@@ -101,3 +101,27 @@ def test_local_overlay(tmp_path):
     assert s.get("risk.risk_per_trade_pct") == 0.0075          # untouched keys still from settings.yaml
     assert yaml.safe_load(local.read_text(encoding="utf-8"))["account"]["size_usd"] == 50000.0
     assert load_settings(DEFAULT_SETTINGS).get("account.size_usd") is None   # explicit path: no overlay
+
+
+def test_exact_2r_plan_not_rejected_by_rounding(cfg):
+    # mid 100.5, stop 95 -> risk 5.5; exact 2R target 111.5 -> stored as 111.49 by cents rounding
+    d = size_signals([sig("A", target=111.49)], cfg, account=100_000)[0]
+    assert d.approved
+    assert not size_signals([sig("B", target=111.0)], cfg, account=100_000)[0].approved
+
+
+def test_earnings_plays_exempt_from_rr_at_half_size(cfg):
+    hold = sig("HOLD", target=104)                      # R:R ~0.64
+    hold.metrics["setup"] = "earnings_hold_through"
+    drift = sig("DRIFT", target=104)
+    drift.metrics["setup"] = "post_earnings_drift"      # not exempt
+    d = {x.ticker: x for x in size_signals([hold, drift], cfg, account=100_000)}
+    assert d["HOLD"].approved and any("R:R rule exempt" in f for f in d["HOLD"].flags)
+    assert d["HOLD"].shares == 62                       # $375 / $6 per share (half of the normal 125)
+    assert d["HOLD"].risk_pct_of_account == pytest.approx(0.00372)
+    assert not d["DRIFT"].approved and "R:R" in d["DRIFT"].reasons[0]
+    # exemption stacks with a weak-regime multiplier
+    assert size_signals([hold], cfg, account=100_000, multiplier=0.5)[0].shares == 31
+    # exempt ideas still face every other limit
+    held = size_signals([hold], cfg, [{"ticker": "HOLD", "sector": None}], account=100_000)[0]
+    assert not held.approved and "already in the book" in held.reasons[0]

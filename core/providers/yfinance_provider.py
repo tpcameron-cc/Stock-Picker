@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -25,6 +25,39 @@ def drop_incomplete_bar(df: pd.DataFrame, fetched_at: datetime, buffer_minutes: 
     last_day = df.index[-1].date()
     cutoff = datetime.combine(last_day, time(16, 0), tzinfo=NY) + timedelta(minutes=buffer_minutes)
     return df.iloc[:-1] if fetched_et < cutoff else df
+
+
+def straddle_from_chain(calls: pd.DataFrame, puts: pd.DataFrame, spot: float, expiry) -> dict | None:
+    """Implied move from the at-the-money straddle: (call mid + put mid) / spot at the strike nearest spot.
+    Mid = (bid+ask)/2; if a side has no bid/ask, last price is used and the result is marked `used_last`."""
+    if calls is None or puts is None or calls.empty or puts.empty or not spot or spot <= 0:
+        return None
+    common = sorted(set(calls["strike"]) & set(puts["strike"]))
+    if not common:
+        return None
+    k = min(common, key=lambda s: abs(s - spot))
+    c, p = calls[calls["strike"] == k].iloc[0], puts[puts["strike"] == k].iloc[0]
+    used_last = False
+
+    def mid(row) -> tuple[float | None, float | None]:
+        nonlocal used_last
+        b, a = float(row.get("bid") or 0), float(row.get("ask") or 0)
+        if b > 0 and a > 0 and a >= b:
+            return (a + b) / 2, (a - b)
+        last = float(row.get("lastPrice") or 0)
+        if last > 0:
+            used_last = True
+            return last, None
+        return None, None
+
+    cm, cs = mid(c)
+    pm, ps = mid(p)
+    if cm is None or pm is None:
+        return None
+    straddle = cm + pm
+    spread_pct = ((cs or 0) + (ps or 0)) / straddle if cs is not None and ps is not None else None
+    return {"move": straddle / spot, "expiry": expiry, "strike": float(k), "straddle_mid": straddle,
+            "spot": float(spot), "spread_pct": spread_pct, "used_last": used_last}
 
 
 class YFinanceProvider:
@@ -144,21 +177,97 @@ class YFinanceProvider:
         item = self.cache.get_or_fetch(f"fundamentals|{ticker.upper()}", 24, fetch)
         return {**item.value, "fetched_at": item.fetched_at}
 
-    def sector(self, ticker: str) -> str | None:
-        """GICS-style sector from Yahoo profile data; None if unavailable. Cached 7 days."""
-        key = f"sector|{ticker.upper()}"
+    def profile(self, ticker: str) -> dict | None:
+        """{sector, first_trade_date} from Yahoo profile data; None on failure. Cached 7 days (failures aren't)."""
+        key = f"profile|{ticker.upper()}"
         hit = self.cache.get(key, 24 * 7)
         if hit is not None:
             return hit.value
         yf = self._yf()
         self.limiter.wait()
         try:
-            sector = (yf.Ticker(ticker).info or {}).get("sector") or None
+            info = yf.Ticker(ticker).info or {}
         except Exception:
             return None                      # transient failure: don't cache, try again next time
-        if sector:
-            self.cache.put(key, sector)
-        return sector
+        ms = info.get("firstTradeDateMilliseconds")
+        prof = {"sector": info.get("sector") or None,
+                "first_trade_date": pd.Timestamp(ms, unit="ms").date() if ms else None}
+        if prof["sector"] or prof["first_trade_date"]:
+            self.cache.put(key, prof)
+        return prof
+
+    def sector(self, ticker: str) -> str | None:
+        """GICS-style sector from Yahoo profile data; None if unavailable."""
+        prof = self.profile(ticker)
+        return prof["sector"] if prof else None
+
+    def earnings_history(self, ticker: str, limit: int = 24) -> pd.DataFrame:
+        """Past and next earnings events: date (session date, ET), timing (bmo|amc), eps_estimate,
+        eps_reported, surprise_pct. Yahoo report times: before noon ET = bmo, otherwise amc. Cached 24h."""
+        yf = self._yf()
+
+        def fetch() -> pd.DataFrame:
+            self.limiter.wait()
+            ed = yf.Ticker(ticker).get_earnings_dates(limit=limit)
+            if ed is None or ed.empty:
+                return pd.DataFrame(columns=["date", "timing", "eps_estimate", "eps_reported", "surprise_pct"])
+            idx = pd.to_datetime(ed.index, utc=True).tz_convert(NY)
+            out = pd.DataFrame({
+                "date": [ts.date() for ts in idx],
+                "timing": ["bmo" if ts.hour < 12 else "amc" for ts in idx],
+                "eps_estimate": ed["EPS Estimate"].astype(float).to_numpy(),
+                "eps_reported": ed["Reported EPS"].astype(float).to_numpy(),
+                "surprise_pct": ed["Surprise(%)"].astype(float).to_numpy(),
+            })
+            return out.sort_values("date").reset_index(drop=True)
+
+        return self.cache.get_or_fetch(f"earnings_history|{ticker.upper()}|{limit}", 24, fetch).value
+
+    def implied_move(self, ticker: str, on_or_after: date) -> dict | None:
+        """ATM straddle mid / spot for the first expiry on or after `on_or_after` (the earnings reaction day).
+        Returns {move, expiry, strike, straddle_mid, spot, spread_pct} or None if no usable chain. Cached 6h."""
+        yf = self._yf()
+
+        def fetch() -> dict | None:
+            t = yf.Ticker(ticker)
+            self.limiter.wait()
+            expiries = [date.fromisoformat(e) for e in (t.options or ())]
+            expiries = [e for e in expiries if e >= on_or_after]
+            if not expiries:
+                return None
+            exp = expiries[0]
+            self.limiter.wait()
+            spot = float(t.fast_info["last_price"])
+            ch = t.option_chain(exp.isoformat())
+            return straddle_from_chain(ch.calls, ch.puts, spot, exp)
+
+        try:
+            return self.cache.get_or_fetch(f"implied|{ticker.upper()}|{on_or_after}", 6, fetch).value
+        except Exception as e:
+            log.info("implied move unavailable for %s: %s", ticker, type(e).__name__)
+            return None
+
+    def estimates(self, ticker: str) -> dict:
+        """Just the consensus tables: {eps_trend, eps_revisions, errors}. Two calls instead of fundamentals()'
+        five; reuses a fresh fundamentals() cache entry if one exists. Cached 24h."""
+        hit = self.cache.get(f"fundamentals|{ticker.upper()}", 24)
+        if hit is not None:
+            return {k: hit.value.get(k) for k in ("eps_trend", "eps_revisions", "errors")}
+        yf = self._yf()
+
+        def fetch() -> dict:
+            t = yf.Ticker(ticker)
+            out: dict = {"errors": []}
+            for name in ("eps_trend", "eps_revisions"):
+                try:
+                    self.limiter.wait()
+                    out[name] = getattr(t, name)
+                except Exception as e:
+                    out[name] = None
+                    out["errors"].append(f"{name}: {type(e).__name__}")
+            return out
+
+        return self.cache.get_or_fetch(f"estimates|{ticker.upper()}", 24, fetch).value
 
     def splits(self, ticker: str) -> pd.Series:
         yf = self._yf()
