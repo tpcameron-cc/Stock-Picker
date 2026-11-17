@@ -17,6 +17,25 @@ import numpy as np
 import pandas as pd
 
 
+DEDUPE_KEY = ["chamber", "last", "asset", "type", "trade_date", "owner", "amount_low", "amount_high"]
+
+
+def dedupe_cross_filing(tx: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Amended reports repeat the original's transactions in a NEW filing. When an identical transaction appears in
+    more than one filing, keep only the latest filing's copy. Repeats inside one filing are kept: those are real
+    separate trades (e.g. the same stock bought in two accounts). Returns (deduped, rows_removed)."""
+    if tx.empty:
+        return tx, 0
+    t = tx.copy()
+    # map(str) per cell: astype(str) keeps NaN as a float under pandas' string dtype ("Over $X" has no high amount)
+    t["_k"] = t[[c for c in DEDUPE_KEY if c in t]].apply(lambda col: col.map(str)).agg("|".join, axis=1)
+    docs = t.groupby("_k")["doc_id"].nunique()
+    multi = t["_k"].isin(docs[docs > 1].index)
+    latest = t[multi].sort_values(["filing_date", "doc_id"]).groupby("_k")["doc_id"].last()
+    keep = ~multi | (t["doc_id"] == t["_k"].map(latest))
+    return t[keep].drop(columns="_k"), int((~keep).sum())
+
+
 def amount_mid(lo: float | None, hi: float | None) -> float | None:
     if lo is None or pd.isna(lo):
         return None

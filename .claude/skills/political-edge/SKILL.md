@@ -1,12 +1,12 @@
 ---
 name: political-edge
-description: Find stocks recently bought by members of Congress whose disclosed trades beat the S&P 500, where the member's committees oversee the company (federal contracts from agencies under their committees = direct link; industry under committee jurisdiction = sector link). Built on House Periodic Transaction Reports parsed from the Clerk's PDFs. Use when the user asks about congressional trading, politician stock picks, committee conflicts, or "what is Congress buying". Research only, public data only, never places orders.
+description: Find stocks recently bought by members of Congress whose disclosed trades beat the S&P 500, where the member's committees oversee the company (federal contracts from agencies under their committees = direct link; industry under committee jurisdiction = sector link). Built on House Periodic Transaction Reports parsed from the Clerk's PDFs and Senate PTRs from the eFD site. Use when the user asks about congressional trading, politician stock picks, committee conflicts, or "what is Congress buying". Research only, public data only, never places orders.
 ---
 
 # political-edge
 
 Code: `scanners/political/` (`screen.py` Step A, `oversight.py` Steps B–C, `score.py`, `scan.py`) and providers
-`core/providers/house_disclosures.py` (PTR PDFs), `congress.py` (members, committees), `usaspending.py` (contracts).
+`core/providers/house_disclosures.py` (PTR PDFs), `senate_disclosures.py` (eFD HTML reports), `congress.py` (members, committees), `usaspending.py` (contracts).
 Thresholds: `config/settings.yaml` under `political:`; committee map: `config/committee_jurisdiction.yaml` (curated).
 
 ## When to use
@@ -15,7 +15,7 @@ Thresholds: `config/settings.yaml` under `political:`; committee map: `config/co
 - As one of the four scanners in `run-all-scans`.
 
 ## Steps
-1. Run the scan (first run downloads ~1,000 House PTR PDFs, ~15 min; PDFs are cached permanently):
+1. Run the scan (first run downloads ~1,000 House PTR PDFs and ~300 Senate reports, ~20 min; cached permanently):
    ```bash
    uv run python -m scanners.political.scan
    ```
@@ -26,7 +26,8 @@ Thresholds: `config/settings.yaml` under `political:`; committee map: `config/co
 4. Always state the method and its limits:
    - performance is **copy-trade** from disclosed trades (amount-range midpoints, trade-date prices; delay-adjusted
      uses filing dates), not the member's actual portfolio return; "portfolio" = PTR-traded book, not net worth;
-   - House only (Senate needs the user's OK to accept the eFD terms); scanned paper PTRs are not read;
+   - House and Senate (Senate via eFD; the user accepted its terms 2026-11-16 for personal research); scanned /
+     paper PTRs are not read; former members (not in the current-members file) are excluded;
    - links use a curated committee map and name-matched USAspending recipients — label them as such;
    - lobbying, FEC money, testimony, bills/hearings, Trump-related overlays and "leaving office" are not covered yet.
 5. Hand Signals to `risk-and-sizing`.

@@ -77,6 +77,19 @@ def match_member(members: pd.DataFrame, last: str, state_district: str | None) -
     return cand["bioguide"].iloc[0] if len(cand) == 1 else None
 
 
+def match_senator(members: pd.DataFrame, first: str, last: str) -> str | None:
+    """Bioguide id for a Senate filer by last name (+ first name / nickname when two senators share a surname)."""
+    sen = members[members["chamber"] == "senate"]
+    cand = sen[sen["last_norm"] == norm(last)]
+    if len(cand) == 0:   # compound surnames, e.g. filed "Van Hollen" vs "Van Hollen Jr"
+        cand = sen[sen["last_norm"].map(lambda x: bool(x) and (x in norm(last) or norm(last) in x))]
+    if len(cand) == 1:
+        return cand["bioguide"].iloc[0]
+    f = norm((first or "").split()[0] if first else "")
+    hit = cand[(cand["first"].map(norm) == f) | (cand["nickname"].map(norm) == f)]
+    return hit["bioguide"].iloc[0] if len(hit) == 1 else None
+
+
 class CongressProvider:
     name = "congress_legislators"
     source_url = SOURCE_URL

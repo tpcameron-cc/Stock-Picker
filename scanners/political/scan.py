@@ -19,22 +19,23 @@ import pandas as pd
 
 from core import indicators as ind
 from core.config import Settings, settings as default_settings
-from core.providers.congress import match_member
+from core.providers.congress import match_member, match_senator
 from core.signals import Confidence, PriceZone, Signal, Source, save_signals
 from core.universe import build_universe
 from scanners.political.oversight import classify, load_jurisdiction, member_oversight
 from scanners.political.score import score_purchase
-from scanners.political.screen import amount_mid, apply_criteria, member_stats, price_on_or_after
+from scanners.political.screen import (
+    amount_mid, apply_criteria, dedupe_cross_filing, member_stats, price_on_or_after,
+)
 
 log = logging.getLogger(__name__)
 SKILL = "political-edge"
 NOT_COVERED = [
-    "Senate trades: the Senate eFD site requires accepting its terms before searching; not done without your OK.",
     "Lobbying (Senate LDA), campaign money (FEC), committee testimony, White House visitor logs: not wired in yet.",
     "Bills sponsored / hearing, markup and vote dates: need a congress.gov API key (free from api.data.gov).",
     "Trump administration holdings, Trump mentions and Trump sponsor ties: only available via InsiderCat (no active plan).",
     "Members leaving office in January: no structured source for retirements / election losses; not flagged.",
-    "Scanned (paper) PTRs have no text layer and are counted as unparsed, not read.",
+    "Scanned (paper) PTRs (House PDFs without text, Senate paper filings) are counted as unparsed, not read.",
 ]
 
 
@@ -48,7 +49,7 @@ def _r(x, nd=4):
 
 
 def run(cfg: Settings | None = None, price_provider=None, house=None, congress=None, contracts_provider=None,
-        edgar=None, today: date | None = None) -> dict:
+        edgar=None, today: date | None = None, senate=None) -> dict:
     from core.providers.congress import CongressProvider
     from core.providers.house_disclosures import HouseDisclosureProvider
     from core.providers.usaspending import USAspendingProvider
@@ -69,6 +70,7 @@ def run(cfg: Settings | None = None, price_provider=None, house=None, congress=N
     # ---- ingest -------------------------------------------------------------------------------------------
     years = [today.year - k for k in range(int(P["years_back"]))]
     tx, coverage = house.transactions(years, progress=True)
+    tx["chamber"], coverage["chamber"] = "house", "house"
     members = congress.members()
     assignments = congress.committee_assignments()
     juris = load_jurisdiction(cfg.path_for("political.jurisdiction_file"))
@@ -76,7 +78,24 @@ def run(cfg: Settings | None = None, price_provider=None, house=None, congress=N
     bmap = {(r.last, r.state_district): match_member(members, r.last, r.state_district) for r in keys.itertuples()}
     tx["bioguide"] = [bmap.get((a, b)) for a, b in zip(tx["last"], tx["state_district"])]
     unmatched = sorted({f"{a} ({b})" for (a, b), v in bmap.items() if v is None})
+
+    senate_on = bool(cfg.get("political.senate.enabled", True))
+    if senate_on:
+        from core.providers.senate_disclosures import SenateDisclosureProvider
+        senate = senate or SenateDisclosureProvider(cfg)
+        stx, scov = senate.transactions(date(min(years), 1, 1), progress=True)
+        scov["chamber"] = "senate"
+        if len(stx):
+            names_ = stx[["first", "last"]].drop_duplicates()
+            smap = {(r.first, r.last): match_senator(members, r.first, r.last) for r in names_.itertuples()}
+            stx["bioguide"] = [smap.get((a, b)) for a, b in zip(stx["first"], stx["last"])]
+            unmatched += sorted({f"Sen. {a} {b}" for (a, b), v in smap.items() if v is None})
+            seat = members.set_index("bioguide")["state_district"]
+            stx["state_district"] = stx["bioguide"].map(seat)
+            tx = pd.concat([tx, stx], ignore_index=True)
+        coverage = pd.concat([coverage, scov], ignore_index=True)
     tx = tx[tx["trade_date"].notna() & tx["type"].isin(["P", "S", "E"])]
+    tx, amended_dupes = dedupe_cross_filing(tx)
 
     long_window = int(P["years_back"]) >= 4
     period = "5y" if long_window else "2y"
@@ -203,7 +222,8 @@ def run(cfg: Settings | None = None, price_provider=None, house=None, congress=N
     screen.to_csv(out / f"{stem}-members.csv", index=False)
     pcols = [c for c in pdf.columns if not c.startswith("_")] if len(pdf) else []
     pdf[pcols].to_csv(out / f"{stem}-purchases.csv", index=False) if len(pdf) else None
-    _write_report(mp, signals, screen, pdf, rejects, coverage, unmatched, ref_notes, price_as_of, years, cfg, edgar)
+    _write_report(mp, signals, screen, pdf, rejects, coverage, unmatched, ref_notes, price_as_of, years, cfg, edgar,
+                  amended_dupes)
     return {"signals": signals, "screen": screen, "purchases": pdf, "rejects": rejects, "coverage": coverage,
             "unmatched": unmatched, "ref_notes": ref_notes, "price_as_of": price_as_of, "paths": {"json": jp, "md": mp}}
 
@@ -262,18 +282,25 @@ def _build_signal(best: pd.Series, group: pd.DataFrame, cfg: Settings, price_as_
     return sig, None
 
 
-def _write_report(md_path, signals, screen, pdf, rejects, coverage, unmatched, ref_notes, price_as_of, years, cfg, edgar):
+def _write_report(md_path, signals, screen, pdf, rejects, coverage, unmatched, ref_notes, price_as_of, years, cfg, edgar,
+                  amended_dupes=0):
     body = md_path.read_text(encoding="utf-8")
     S = cfg.section("political.screen")
-    cov = coverage
-    scanned = int((~cov["parsed"] & cov["note"].str.contains("scanned", na=False)).sum()) if len(cov) else 0
+    def cov_line(cov: pd.DataFrame, label: str) -> str:
+        if not len(cov):
+            return f"- {label}: no filings"
+        parsed = int(cov["parsed"].sum())
+        scanned = int((~cov["parsed"] & cov["note"].str.contains("scanned|paper", na=False)).sum())
+        return (f"- {label}: {len(cov)} filings, {parsed} parsed, {scanned} scanned/paper (unreadable), "
+                f"{len(cov) - parsed - scanned} other unparsed")
     L = [f"# Political edge — {date.today().isoformat()}", "",
          f"_Research only, not investment advice. Public disclosures only. Prices as of close {price_as_of}. "
          f"Generated {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC._", "",
-         f"- House PTRs {', '.join(map(str, years))}: {len(cov)} filings, {int(cov['parsed'].sum())} parsed, "
-         f"{scanned} scanned (unreadable), {len(cov) - int(cov['parsed'].sum()) - scanned} other unparsed",
+         cov_line(coverage[coverage["chamber"] == "house"], f"House PTRs {', '.join(map(str, years))}"),
+         cov_line(coverage[coverage["chamber"] == "senate"], f"Senate PTRs filed since {min(years)}-01-01 (eFD)"),
+         f"- Amended-report repeats removed (same transaction in a later filing): {amended_dupes}",
          f"- Members with trades: {len(screen)}; qualified: **{int(screen['qualified'].sum())}**; "
-         f"unmatched filers: {', '.join(unmatched) or 'none'}",
+         f"filers not in the current-members file (usually former members; excluded): {', '.join(unmatched) or 'none'}",
          f"- Ideas: **{len(signals)}**; purchases classified: {len(pdf)}; rejected names: {len(rejects)}",
          "- Performance is copy-trade: buys at amount-range midpoints, priced at the trade date (or filing date for "
          "delay-adjusted), sells FIFO, vs SPY with identical cash flows. Portfolio size = PTR-traded book, not net worth.",

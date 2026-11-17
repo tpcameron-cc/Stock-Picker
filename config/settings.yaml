@@ -75,12 +75,15 @@ catalyst:
   output_top_n: 20
 
 # ---------------------------------------------------------------------------
-# Skill 1: political-edge (House PTRs parsed from the Clerk's PDFs; Senate not yet covered)
+# Skill 1: political-edge (House PTR PDFs + Senate eFD PTRs)
 # ---------------------------------------------------------------------------
 political:
   years_back: 2                  # PTR filing years to ingest (2 = this year + last; 4 enables the 3Y window)
   house:
     min_seconds_between_calls: 0.5
+  senate:
+    enabled: true                # eFD terms accepted by the user 2026-11-16 (personal, non-commercial use)
+    min_seconds_between_calls: 1.0
   jurisdiction_file: config/committee_jurisdiction.yaml
 
   screen:                        # Step A: which members' trades to follow

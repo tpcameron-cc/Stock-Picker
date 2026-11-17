@@ -36,7 +36,7 @@ cite every number, and say plainly when data is missing or a skill is underperfo
 | `config/local.yaml` | **Gitignored** personal overrides (account size). Merged over `settings.yaml` by `settings()`. |
 | `core/fundamentals.py` | Shared fundamental checks: YoY growth, deceleration, estimate revisions, earnings proximity. Missing data = `passed=None`, never a guess. |
 | `scanners/<skill>/` | Python behind each skill (importable, tested). `scanners/breakout/`: `setups.py` (causal features, gates, plans, score), `scan.py`, `backtest.py`, `experiments.py` (exit/entry variants, read-only). `scanners/catalyst/`: `history.py` (past earnings reactions), `plays.py` (scores, plays, plans, drift, lockups), `scan.py`. `scanners/political/`: `screen.py` (Step A copy-trade screen), `oversight.py` (committee links), `score.py`, `scan.py`. |
-| `core/providers/` | One module per data source, each with disk cache (`DiskCache`) + rate limiting (`RateLimiter`). `earnings_calendar.py` = Nasdaq earnings calendar; yfinance provider also has `earnings_history`, `implied_move`, `estimates`, `profile`. `house_disclosures.py` = House PTR index + PDF parser; `congress.py` = members/committees; `usaspending.py` = federal contracts; `edgar.py` also parses Form 4 open-market buys. |
+| `core/providers/` | One module per data source, each with disk cache (`DiskCache`) + rate limiting (`RateLimiter`). `earnings_calendar.py` = Nasdaq earnings calendar; yfinance provider also has `earnings_history`, `implied_move`, `estimates`, `profile`. `house_disclosures.py` = House PTR index + PDF parser; `senate_disclosures.py` = Senate eFD PTRs (accepts the agreement); `congress.py` = members/committees; `usaspending.py` = federal contracts; `edgar.py` also parses Form 4 open-market buys. |
 | `.claude/skills/` | One `SKILL.md` per skill; each calls into `scanners/` and `core/`. |
 | `data/cache/` | Provider cache (gitignored). Delete a subfolder to force a refetch. |
 | `data/journal.sqlite` | Paper-trade history (gitignored). Back it up; it is the only record of paper results. |
@@ -128,7 +128,7 @@ uv run python -m scanners.political.scan                # House PTRs (~15 min fi
   expiry (`plays.event_implied_move`). Session counts use weekdays and ignore exchange holidays (e.g. Thanksgiving).
 - political-edge data: InsiderCat MCP is connected but the account has no active plan (tools return no data);
   the user chose free parsing of House PTR PDFs (2026-11-16). Scanned paper PTRs have no text and are skipped.
-  Senate eFD needs the user's OK to accept its terms. Not yet covered: lobbying (LDA API was down), FEC money,
+  Senate eFD is covered (terms accepted by the user). Not yet covered: lobbying (LDA API was down), FEC money,
   testimony, visitor logs, bills / hearings (congress.gov key), Trump admin / mentions / sponsors (InsiderCat only),
   "leaving office". Personal, non-commercial use only (5 U.S.C. 13107).
 - political-edge performance is copy-trade from disclosed trades (amount midpoints, trade-date prices; delay-adjusted
@@ -144,3 +144,11 @@ uv run python -m scanners.political.scan                # House PTRs (~15 min fi
   federal contract $); these keep the spec's DIRECT label but carry a "broad government vendor" flag.
 - risk-and-sizing tolerates cent-rounding in R:R exactly (`core.risk.rounding_slack`), so a 2R plan on a low-priced
   stock (rounded to 1.99) is not rejected while genuinely short targets still are.
+- Senate eFD terms: on 2026-11-16 the user read the eFD agreement (Ethics in Government Act prohibitions: no
+  unlawful or commercial use, no credit ratings, no soliciting money; civil penalty up to $10,000) and agreed, for
+  personal non-commercial research, authorizing the scanner to accept the eFD agreement on their behalf.
+  Senate coverage built the same day: 278 senator PTRs since 2025-01-01, all parsed (HTML tables), 2,736 transactions.
+- Amended reports repeat the original's transactions in a new filing: identical transactions across different
+  filings keep only the latest copy (`screen.dedupe_cross_filing`; 133 Senate + 14 House rows on 2026-11-16).
+  Repeats inside one filing are kept (separate accounts). Former members (e.g. Sen. Mullin, Sen. Carper) are not in
+  the current-members file and are excluded.
