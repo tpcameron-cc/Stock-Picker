@@ -21,7 +21,7 @@ import pandas as pd
 from core.config import Settings, settings as default_settings
 from core.providers.attention import AttentionProvider, SnapshotStore, news_velocity
 from core.providers.usaspending import core_name
-from core.signals import Confidence, PriceZone, Signal, Source, save_signals
+from core.signals import Confidence, PriceZone, Signal, Source, lagging_data_flag, save_signals
 from core.universe import build_universe
 from scanners.hype.logic import attention_score, confirmation, late_stage, make_plan, pump_flags, squeeze_note
 
@@ -157,7 +157,9 @@ def run(cfg: Settings | None = None, price_provider=None, attention=None, today:
                             None if calls else "option activity unavailable",
                             "mention baseline = yesterday (snapshot history still building)" if baseline_mode == "yesterday" else None,
                             nd.get("news_note") if n_vel is not None else None] if g]
-        signals.append(_signal(row, plan, pflags, squeeze_note(sq, H), gaps, price_as_of))
+        bar_date = uni.histories[t].index[-1].date()
+        gaps += [f for f in [lagging_data_flag(bar_date, price_as_of)] if f]
+        signals.append(_signal(row, plan, pflags, squeeze_note(sq, H), gaps, bar_date))
         rows.append({**row, "stage": "idea", "reason": ""})
 
     signals.sort(key=lambda s: s.score, reverse=True)

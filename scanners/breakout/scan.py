@@ -17,7 +17,7 @@ import pandas as pd
 from core import indicators as ind
 from core.config import Settings, settings as default_settings
 from core.fundamentals import FundamentalResult, evaluate_fundamentals
-from core.signals import Confidence, KeyDate, PriceZone, Signal, Source, save_signals
+from core.signals import Confidence, KeyDate, PriceZone, Signal, Source, lagging_data_flag, save_signals
 from core.universe import build_universe
 from scanners.breakout.setups import Plan, compute_features, make_plan, passes_gates, technical_score
 
@@ -192,7 +192,9 @@ def run(cfg: Settings | None = None, source: str | None = None, limit: int | Non
                 rejects.append({"ticker": t, "stage": "fundamentals", "reason": "; ".join(fr.fail_reasons)})
                 continue
         rec = passed.loc[t]
-        sig = build_signal(c, fr, cfg, price_as_of, fund_as_of, list(rec.get("risk_flags", []) or []),
+        bar_date = histories[t].index[-1].date()
+        flags_ = list(rec.get("risk_flags", []) or []) + [f for f in [lagging_data_flag(bar_date, price_as_of)] if f]
+        sig = build_signal(c, fr, cfg, bar_date, fund_as_of, flags_,
                            str(rec.get("name", "") or ""))
         if sig.score < float(b["scoring"]["min_score"]):
             rejects.append({"ticker": t, "stage": "score", "reason": f"score {sig.score:.1f} < {b['scoring']['min_score']}"})

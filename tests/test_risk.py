@@ -141,3 +141,15 @@ def test_setup_size_multiplier_for_hype(cfg):
     s.metrics["setup"] = "momentum_hype"
     d = size_signals([s], cfg, account=100_000)[0]
     assert d.approved and d.shares == 62 and any("sized at 50%" in f for f in d.flags)
+
+
+def test_no_self_correlation_and_lagging_flag(cfg):
+    from datetime import date as _d
+
+    from core.signals import lagging_data_flag
+    held = returns(1)
+    d = size_signals([sig("H")], cfg, [{"ticker": "H", "sector": None}, {"ticker": "Z", "sector": None}],
+                     returns={"H": held, "Z": returns(9)}, account=100_000)[0]
+    assert d.corr_with != "H" and not any("with H" in r for r in d.reasons)
+    assert lagging_data_flag(_d(2026, 11, 13), _d(2026, 11, 16)).startswith("prices end 2026-11-13")
+    assert lagging_data_flag(_d(2026, 11, 16), _d(2026, 11, 16)) is None

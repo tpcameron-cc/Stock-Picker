@@ -131,7 +131,7 @@ def size_signals(signals: Iterable[Signal], cfg: Settings, existing: list[dict] 
         else:
             d.flags.append("sector unknown: sector cap not applied")
 
-        book_returns = {p["ticker"]: returns.get(p["ticker"]) for p in book}
+        book_returns = {p["ticker"]: returns.get(p["ticker"]) for p in book if p["ticker"] != s.ticker}
         if book:
             d.max_corr, d.corr_with = max_correlation(returns.get(s.ticker), book_returns,
                                                       int(r["correlation_lookback_days"]))

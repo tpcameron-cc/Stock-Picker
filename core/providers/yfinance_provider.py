@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, time, timedelta
+import os
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from core.config import Settings, settings as default_settings
-from core.providers.base import DiskCache, RateLimiter
+from core.providers.base import STALE_OK_ENV, DiskCache, RateLimiter
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +26,19 @@ def drop_incomplete_bar(df: pd.DataFrame, fetched_at: datetime, buffer_minutes: 
     last_day = df.index[-1].date()
     cutoff = datetime.combine(last_day, time(16, 0), tzinfo=NY) + timedelta(minutes=buffer_minutes)
     return df.iloc[:-1] if fetched_et < cutoff else df
+
+
+def last_close_cutoff(now: datetime, buffer_minutes: int = 20) -> datetime:
+    """Most recent weekday 16:00 ET (+buffer) at or before `now`. Daily bars fetched before this are missing the
+    latest completed session, whatever their cache age. Exchange holidays are not special-cased (a refetch on a
+    holiday is harmless)."""
+    t = now.astimezone(NY)
+    d = t.date()
+    while True:
+        cut = datetime.combine(d, time(16, 0), tzinfo=NY) + timedelta(minutes=buffer_minutes)
+        if d.weekday() < 5 and cut <= t:
+            return cut
+        d -= timedelta(days=1)
 
 
 def straddle_from_chain(calls: pd.DataFrame, puts: pd.DataFrame, spot: float, expiry) -> dict | None:
@@ -81,7 +95,12 @@ class YFinanceProvider:
         for i in range(0, len(tickers), self.batch_size):
             batch = tickers[i : i + self.batch_size]
             key = f"history|{period}|{','.join(batch)}"
-            item = self.cache.get_or_fetch(key, self.ttl, lambda b=batch: self._download(b, period))
+            item = self.cache.get(key, self.ttl)
+            # A cached copy fetched before the latest session's close lacks that session: refetch (unless --quick).
+            if item is not None and os.environ.get(STALE_OK_ENV) != "1" and                     item.fetched_at < last_close_cutoff(datetime.now(timezone.utc), buffer_min):
+                item = None
+            if item is None:
+                item = self.cache.put(key, self._download(batch, period))
             self.last_fetched_at = item.fetched_at
             for t, df in item.value.items():
                 out[t] = drop_incomplete_bar(df, item.fetched_at, buffer_min) if drop_partial else df

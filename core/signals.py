@@ -90,6 +90,14 @@ class Signal(BaseModel):
         return (self.targets[0] - self.entry_mid) / risk
 
 
+def lagging_data_flag(bar_date: date, run_as_of: date) -> str | None:
+    """Flag when a ticker's latest bar is older than the run's (the provider hasn't published its latest session).
+    The idea's own price date is used for its plan and its journal entry either way."""
+    if bar_date < run_as_of:
+        return f"prices end {bar_date} (provider hasn't published {run_as_of} for this stock yet)"
+    return None
+
+
 def save_signals(signals: Iterable[Signal], out_dir: str | Path, stem: str) -> tuple[Path, Path]:
     """Write `<stem>.json` and `<stem>.md` into out_dir. Returns both paths."""
     sigs = list(signals)

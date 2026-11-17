@@ -88,7 +88,7 @@ def signal_date_of(sig: Signal) -> date:
 
 def log_signals(path: str | Path, signals: Iterable[Signal], decisions: dict | None = None,
                 run_id: str | None = None, log_rejected: bool = True) -> dict:
-    """Insert ideas. `decisions` maps ticker -> SizingDecision (core.risk). Ideas without a decision are logged
+    """Insert ideas. `decisions` maps ticker or (ticker, skill) -> SizingDecision (core.risk). Ideas without a decision are logged
     as taken=0 with a note. Re-logging the same (signal_date, ticker, skill) is ignored."""
     decisions = decisions or {}
     run_id = run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -96,7 +96,7 @@ def log_signals(path: str | Path, signals: Iterable[Signal], decisions: dict | N
     inserted = skipped = 0
     with closing(connect(path)) as con, con:
         for s in signals:
-            d = decisions.get(s.ticker)
+            d = decisions.get((s.ticker, s.skill), decisions.get(s.ticker))   # per-skill decision wins
             taken = int(bool(d and d.approved))
             if not taken and not log_rejected:
                 continue

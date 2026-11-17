@@ -56,6 +56,7 @@ catalyst:
     min_rvol: 2.0                # reaction-day volume >= 2x the prior 50-day average
     guidance_proxy_min_change: 0.01  # current-FY or next-Q EPS estimate up >= 1% in 30d (proxy for raised guidance)
     require_guidance_proxy: true # reject if estimates FELL after the report; unknown = allowed, low confidence
+    min_hold_sessions: 1         # "holding above the gap" needs >= 1 session after the reaction day
     entry_zone_pct: 0.02         # entry zone = last close +-2%
     max_stop_pct: 0.12           # stop = reaction-day low; reject if more than 12% below entry
     target_r: 2.0                # target = 2R (drift has no natural measured target; labeled)
@@ -183,6 +184,45 @@ hype:
     target_rs: [2.0, 3.0]        # scale out: half at 2R, rest at 3R
     time_stop_days: 5            # spec range 3-10 sessions
   min_score: 40
+
+# ---------------------------------------------------------------------------
+# Market regime (checked first by run-all-scans)
+# ---------------------------------------------------------------------------
+regime:
+  sector_etfs: [XLB, XLC, XLE, XLF, XLI, XLK, XLP, XLRE, XLU, XLV, XLY]   # breadth = share above their 50-day
+  equal_weight: RSP              # equal-weight S&P vs SPY: is the rally broad?
+  vix: ^VIX
+  breadth_min: 0.5               # >= 50% of sectors above their 50-day average = healthy breadth
+  vix_calm: 20                   # VIX below 20 = calm
+  vix_rising_ratio: 1.10         # VIX > 110% of its 20-day average = rising fear
+  slope_lookback: 10             # SMA50 higher than 10 sessions ago = rising
+  equal_weight_lookback: 20      # RSP/SPY ratio change over 20 sessions
+  strong_min_points: 5           # of 7 bullish checks: >= 5 strong, 3-4 neutral, <= 2 weak
+  weak_max_points: 2
+  actions:                       # what run-all-scans does in each regime
+    strong:  {min_score_add: 0,  size_multiplier: 1.0}
+    neutral: {min_score_add: 5,  size_multiplier: 0.75}
+    weak:    {min_score_add: 15, size_multiplier: 0.5}
+
+# ---------------------------------------------------------------------------
+# Skill 6: run-all-scans (orchestrator) and Skill 7: review-performance
+# ---------------------------------------------------------------------------
+orchestrator:
+  skills: [political-edge, breakout-scanner, momentum-hype, catalyst-plays]
+  min_score: 40                  # merged ideas below (min_score + regime add) are rejected
+  confluence_bonus: 10           # per additional skill flagging the same ticker
+  conflict_penalty: 10           # per conflict (e.g. breakout with earnings in 3 sessions)
+  earnings_conflict_sessions: 3
+  top_n: 10
+  quick_top_n: 5
+  quick_limit: 1500              # --quick: breakout / catalyst scan only the first N listed stocks, cached data
+  timeout_minutes: 60            # per scanner process
+
+review:
+  min_closed_trades: 30          # fewer closed trades per skill -> "too early to judge"
+  bootstrap_samples: 2000
+  noise_band_r: 0.0              # expectancy CI entirely above this = adding value; entirely below = negative
+  bad_signal_r: -0.2             # signal types averaging below -0.2R (with enough trades) -> suggestion
 
 # ---------------------------------------------------------------------------
 # Skill 5: risk-and-sizing (paper sizing only; nothing here places orders)

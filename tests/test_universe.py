@@ -157,3 +157,21 @@ def test_drop_incomplete_bar():
     assert len(drop_incomplete_bar(df, after_close)) == 2
     next_day = datetime(2026, 11, 17, 14, 0, tzinfo=timezone.utc)
     assert len(drop_incomplete_bar(df, next_day)) == 2           # Monday bar is final by Tuesday
+
+
+def test_last_close_cutoff():
+    from datetime import datetime, timezone
+
+    from core.providers.yfinance_provider import NY, last_close_cutoff
+
+    def et(*a):
+        return datetime(*a, tzinfo=NY)
+
+    # Monday 16:39 ET -> Monday's close counts
+    assert last_close_cutoff(et(2026, 11, 16, 16, 39)) == et(2026, 11, 16, 16, 20)
+    # Monday 15:00 ET -> still Friday's close
+    assert last_close_cutoff(et(2026, 11, 16, 15, 0)) == et(2026, 11, 13, 16, 20)
+    # Sunday -> Friday
+    assert last_close_cutoff(et(2026, 11, 15, 12, 0)) == et(2026, 11, 13, 16, 20)
+    # works with UTC input
+    assert last_close_cutoff(datetime(2026, 11, 17, 1, 0, tzinfo=timezone.utc)) == et(2026, 11, 16, 16, 20)

@@ -242,6 +242,8 @@ def evaluate_drift(ev: dict, surprise_pct: float | None, guidance: str | None, c
         parts["guidance"] = sc["guidance"] / 2
     if ev["min_low_since"] <= ev["pre_close"]:
         fails.append("gap filled (traded back to the pre-report close)")
+    elif int(ev["bars_since"]) < int(d["min_hold_sessions"]):
+        fails.append(f"reaction day only: the gap hasn't had {d['min_hold_sessions']} session(s) to prove it holds yet")
     else:
         parts["holding"] = sc["holding"]
 

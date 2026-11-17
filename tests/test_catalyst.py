@@ -249,3 +249,9 @@ def test_drift_prefilter(c):
     flat = bars(base + [100.5, 100, 100], vol=vol + [1e6] * 3)
     msg = drift_prefilter(flat, SimpleNamespace(date=d, timing="unknown", surprise_pct=None), c)
     assert msg.startswith("no qualifying reaction") and "bmo" in msg and "amc" in msg
+
+
+def test_drift_needs_at_least_one_session_after_the_gap(c):
+    plan, fails, *_ = evaluate_drift(ev(bars_since=0), 12.0, "raised", c)
+    assert plan is None and any("reaction day only" in f for f in fails)
+    assert evaluate_drift(ev(bars_since=1), 12.0, "raised", c)[0] is not None

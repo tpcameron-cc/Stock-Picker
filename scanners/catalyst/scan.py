@@ -17,7 +17,7 @@ import pandas as pd
 
 from core import indicators as ind
 from core.config import Settings, settings as default_settings
-from core.signals import Confidence, KeyDate, PriceZone, Signal, Source, save_signals
+from core.signals import Confidence, KeyDate, PriceZone, Signal, Source, lagging_data_flag, save_signals
 from core.universe import build_universe
 from scanners.catalyst.history import event_stats, history_table, reaction_index, summarize_history
 from scanners.catalyst.plays import (
@@ -184,7 +184,10 @@ def analyze_upcoming(rows: pd.DataFrame, hist: dict, prov, edgar, cfg: Settings,
             hits.append("positive_drift_history")
         signals.append(_signal(t, names.get(t, t), plan, score, conf, thesis, hits,
                                [KeyDate(date=row.date, kind="earnings", note=timing)], inval, neg + gaps,
-                               _sources(t, price_as_of, date.today(), implied), metrics, price_as_of))
+                               _sources(t, df.index[-1].date(), date.today(), implied), metrics, df.index[-1].date()))
+        lag = lagging_data_flag(df.index[-1].date(), price_as_of)
+        if lag:
+            signals[-1].risk_flags.append(lag)
     return signals, watch, rejects
 
 
@@ -268,7 +271,10 @@ def analyze_drift(rows: pd.DataFrame, hist: dict, prov, edgar, cfg: Settings, pr
         inval = f"Close back below the reaction-day low {plan.stop:.2f} (gap failing) or into the gap at {ev['pre_close']:.2f}."
         signals.append(_signal(t, names.get(t, t), plan, score, conf, thesis, hits,
                                [KeyDate(date=row.date, kind="earnings", note="reported")], inval, neg,
-                               _sources(t, price_as_of, date.today(), None), metrics, price_as_of))
+                               _sources(t, df.index[-1].date(), date.today(), None), metrics, df.index[-1].date()))
+        lag = lagging_data_flag(df.index[-1].date(), price_as_of)
+        if lag:
+            signals[-1].risk_flags.append(lag)
     return signals, rejects
 
 

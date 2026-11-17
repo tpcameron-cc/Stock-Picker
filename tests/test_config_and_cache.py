@@ -51,3 +51,13 @@ def test_disk_cache_ttl(tmp_path):
     assert len(calls) == 1
     c.get_or_fetch("k", 0, fetch)                # expired -> refetch
     assert len(calls) == 2
+
+
+def test_disk_cache_atomic_and_stale_ok(tmp_path, monkeypatch):
+    from core.providers.base import STALE_OK_ENV
+    c = DiskCache(tmp_path, "t")
+    c.put("k", 1)
+    assert not list((tmp_path / "t").glob("*.tmp"))          # no temp files left behind
+    assert c.get("k", 0) is None                             # expired normally
+    monkeypatch.setenv(STALE_OK_ENV, "1")
+    assert c.get("k", 0).value == 1                          # quick mode accepts the cached copy

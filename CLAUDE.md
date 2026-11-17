@@ -31,6 +31,9 @@ cite every number, and say plainly when data is missing or a skill is underperfo
 | `core/indicators.py` | Pure technical indicators (SMA/EMA, ATR, Bollinger, RSI, $vol, RVOL, MA stack, RS, VCP). |
 | `core/simulate.py` | Shared trade simulator (entry fills, stops, targets, time stops, optional trailing exits). Used by the backtest AND the journal so both apply identical rules. |
 | `core/risk.py` | risk-and-sizing: fixed-% risk sizing, position cap, 2:1 min R:R, max positions, sector cap, correlation check. CLI sizes Signal JSON files and can log them. |
+| `core/regime.py` | Market regime: SPY trend, sector-ETF breadth, equal-weight vs SPY, VIX level/trend → strong / neutral / weak and the threshold raise + size cut it implies. |
+| `core/review.py` | review-performance: outcomes, per-skill verdicts with bootstrap CIs, signal/setup tables, taken-vs-rejected, suggestions (never applied). |
+| `scanners/run_all.py` | run-all-scans: regime → 4 scanners as parallel processes → merge by ticker (confluence, conflicts) → size → journal → `reports/YYYY-MM-DD.md/.csv`. |
 | `core/journal.py` | Paper-trade journal (SQLite `data/journal.sqlite`, table `paper_trades`): log ideas, mark outcomes, stats per skill / setup / signal. |
 | `config/committee_jurisdiction.yaml` | **Curated** committee → agencies / sectors / industries map (House Rule X, Senate Rule XXV). Editable; reports label links built from it. |
 | `config/local.yaml` | **Gitignored** personal overrides (account size). Merged over `settings.yaml` by `settings()`. |
@@ -40,6 +43,7 @@ cite every number, and say plainly when data is missing or a skill is underperfo
 | `.claude/skills/` | One `SKILL.md` per skill; each calls into `scanners/` and `core/`. |
 | `data/cache/` | Provider cache (gitignored). Delete a subfolder to force a refetch. |
 | `data/journal.sqlite` | Paper-trade history (gitignored). Back it up; it is the only record of paper results. |
+| `data/logs/` | Per-scanner logs from run-all-scans (gitignored). |
 | `data/attention/` | Daily attention snapshots (gitignored, not re-downloadable). They build momentum-hype's 30-day mention baseline. |
 | `reports/` | Dated outputs (`universe-YYYY-MM-DD.csv`, later `YYYY-MM-DD.md/.csv`). |
 | `tests/` | pytest suite. |
@@ -61,6 +65,9 @@ cite every number, and say plainly when data is missing or a skill is underperfo
 - Personal values (account size) live in `config/local.yaml`, never in `settings.yaml`. Tests load
   `settings.yaml` explicitly (`load_settings(DEFAULT_SETTINGS)`) so they never see personal overrides.
 - Journal outcomes are recomputed from prices until final; logging is idempotent per (signal_date, ticker, skill).
+- Daily bars cached before the most recent close are refetched (`last_close_cutoff`), except in --quick mode
+  (`STOCKPICKER_STALE_OK=1`). Cache writes are atomic so parallel scanners can share `data/cache/`.
+- run-all-scans logs every skill's idea; only the sized, approved primary idea per ticker has taken = 1.
 
 ## Running
 
@@ -81,6 +88,9 @@ uv run python -m core.journal update|list|summary       # paper-trade outcomes a
 uv run python -m scanners.catalyst.scan                 # earnings plays + drift (~10 min cold, seconds when cached)
 uv run python -m scanners.political.scan                # House PTRs (~15 min first run: ~1,000 PDFs, cached forever)
 uv run python -m scanners.hype.scan                     # momentum-hype (run daily: builds the attention baseline)
+uv run python -m core.regime                            # market regime only
+uv run python -m scanners.run_all                       # THE daily pipeline (after the close); --quick / --only / --skip-run
+uv run python -m core.review                            # weekly review (suggestions only)
 ```
 
 ## Environment variables
@@ -100,7 +110,7 @@ uv run python -m scanners.hype.scan                     # momentum-hype (run dai
 - [x] Stage 4: `catalyst-plays` (earnings plays, post-earnings drift, lockup / offering flags)
 - [x] Stage 5: `political-edge` — House PTRs parsed from PDFs (InsiderCat has no active plan; user chose the free route)
 - [x] Stage 6: `momentum-hype` (attention velocity + price confirmation; high risk, 50% size)
-- [ ] Stage 7: `run-all-scans` (+ `regime.py`) and `review-performance`
+- [x] Stage 7: `run-all-scans` (+ `regime.py`) and `review-performance`
 
 ## Known limitations
 
@@ -161,4 +171,14 @@ uv run python -m scanners.hype.scan                     # momentum-hype (run dai
   mentions; Monday-vs-Sunday flagged); common-word tickers flagged. First live run was a broad down day: 0 ideas
   (64 of 68 attention names failed to hold gains into the close); a relaxed-gate verification run exercised the
   news / options / short-interest / plan stages on live data. `risk.setup_size_multipliers` sizes hype at 50%.
+- Regime (2026-11-16): NEUTRAL 3/7 (SPY below its falling 50-day, VIX 22.9 and rising; breadth 8/11 sectors,
+  equal-weight beating SPY) → thresholds +5, sizes 75%. Yahoo had not yet published SPY's 11/16 bar that evening;
+  the report notes components with different latest bars.
+- review-performance needs ~30 closed paper trades per skill before any verdict; until then it says "too early".
 
+- First full run-all-scans (2026-11-16, ~19 min cold, ~35 s per scanner cached): all four scanners ok; 30 tickers;
+  book filled to the 8-position limit. Fixed on the live run: drift entries now need >= 1 session after the gap
+  (`catalyst.drift.min_hold_sessions`; CBRS had held "0 sessions"); every idea uses its OWN stock's latest bar date
+  (Yahoo publishes bars unevenly in the evening) and flags lagging data; no self-correlation; ideas already TAKEN in
+  the journal are shown as held with their original size and still count against limits. The first, buggy batch
+  (31 rows, run 20261117T013246Z) was deleted from the journal with the user's approval and re-logged correctly.

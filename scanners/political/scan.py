@@ -20,7 +20,7 @@ import pandas as pd
 from core import indicators as ind
 from core.config import Settings, settings as default_settings
 from core.providers.congress import match_member, match_senator
-from core.signals import Confidence, PriceZone, Signal, Source, save_signals
+from core.signals import Confidence, PriceZone, Signal, Source, lagging_data_flag, save_signals
 from core.universe import build_universe
 from scanners.political.oversight import classify, load_jurisdiction, member_oversight
 from scanners.political.score import score_purchase
@@ -232,6 +232,7 @@ def _build_signal(best: pd.Series, group: pd.DataFrame, cfg: Settings, price_as_
                   ) -> tuple[Signal | None, str | None]:
     PL = cfg.section("political.plan")
     df = best["_df"]
+    run_as_of, price_as_of = price_as_of, df.index[-1].date()     # the idea uses its own stock's latest bar
     close = float(df["close"].iloc[-1])
     atr = float(ind.atr(df, int(cfg.get("indicators.atr_period"))).iloc[-1])
     z = float(PL["entry_zone_pct"])
@@ -254,6 +255,9 @@ def _build_signal(best: pd.Series, group: pd.DataFrame, cfg: Settings, price_as_
     exception, mflags, gaps = _s(best["member_exception"]), _s(best["member_flags"]), _s(best["gaps"])
     flags = [f for f in [_s(best["timing"]), _s(best["link_flags"]), mflags, exception, gaps] if f]
     flags.append("disclosure signal: public PTR data, possibly weeks old")
+    lag = lagging_data_flag(price_as_of, run_as_of)
+    if lag:
+        flags.append(lag)
     hits = [f"{link}_overlap"] + (["timing_flag"] if _s(best["timing"]) else []) + \
            (["agreement"] if best["other_qualified_buyers"] else []) + (["insider_cluster"] if best["insider_buys"] else [])
     conf = (Confidence.high if link == "direct" and not exception and "borderline" not in mflags

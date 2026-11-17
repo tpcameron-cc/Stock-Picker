@@ -25,6 +25,11 @@ class EdgarUnavailable(RuntimeError):
 
 def parse_form4_purchases(xml_text: str) -> list[dict]:
     """Open-market purchases (non-derivative, transactionCode P) from a Form 4 XML document. Pure function."""
+    return parse_form4_transactions(xml_text, "P")
+
+
+def parse_form4_transactions(xml_text: str, code: str) -> list[dict]:
+    """Non-derivative transactions with the given code (P = open-market purchase, S = open-market sale)."""
     import xml.etree.ElementTree as ET
 
     try:
@@ -34,7 +39,7 @@ def parse_form4_purchases(xml_text: str) -> list[dict]:
     owner = (root.findtext(".//reportingOwner/reportingOwnerId/rptOwnerName") or "").strip()
     out = []
     for t in root.findall(".//nonDerivativeTable/nonDerivativeTransaction"):
-        if (t.findtext("./transactionCoding/transactionCode") or "").strip() != "P":
+        if (t.findtext("./transactionCoding/transactionCode") or "").strip() != code:
             continue
         try:
             shares = float(t.findtext("./transactionAmounts/transactionShares/value") or 0)
@@ -100,7 +105,12 @@ class EdgarProvider:
 
     def insider_open_market_buys(self, ticker: str, lookback_days: int, today: date | None = None,
                                  max_filings: int = 20) -> pd.DataFrame:
-        """Open-market purchases (Form 4, transaction code P) filed in the lookback window.
+        """Open-market purchases (Form 4, code P) filed in the lookback window."""
+        return self.insider_transactions(ticker, "P", lookback_days, today, max_filings)
+
+    def insider_transactions(self, ticker: str, code: str, lookback_days: int, today: date | None = None,
+                             max_filings: int = 20) -> pd.DataFrame:
+        """Form 4 non-derivative transactions with `code` (P buy / S sell) filed in the lookback window.
         Columns: filing_date, owner, trade_date, shares, price, value, url. Reads up to `max_filings` Form 4s."""
         cols = ["filing_date", "owner", "trade_date", "shares", "price", "value", "url"]
         df = self.recent_filings(ticker)
@@ -120,7 +130,7 @@ class EdgarProvider:
                 return resp.text
 
             xml = self.cache.get_or_fetch(f"form4|{raw_url}", 24 * 3650, fetch).value
-            for t in parse_form4_purchases(xml):
+            for t in parse_form4_transactions(xml, code):
                 rows.append({"filing_date": r.filing_date, **t, "url": r.url})
         return pd.DataFrame(rows, columns=cols)
 

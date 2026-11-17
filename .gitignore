@@ -14,3 +14,4 @@ reports/*
 config/local.yaml
 data/*.sqlite
 data/attention/
+data/logs/
