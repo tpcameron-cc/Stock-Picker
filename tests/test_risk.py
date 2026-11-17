@@ -125,3 +125,12 @@ def test_earnings_plays_exempt_from_rr_at_half_size(cfg):
     # exempt ideas still face every other limit
     held = size_signals([hold], cfg, [{"ticker": "HOLD", "sector": None}], account=100_000)[0]
     assert not held.approved and "already in the book" in held.reasons[0]
+
+
+def test_rounding_slack_on_low_priced_stock(cfg):
+    # AT&T-like plan: entry 21.91-22.81 (mid 22.36), stop 21.22 -> exact 2R target 24.64, stored 24.63 -> 1.99
+    s = sig("T", low=21.91, high=22.81, stop=21.22, target=24.63)
+    assert round(s.reward_risk, 2) == 1.99
+    assert size_signals([s], cfg, account=100_000)[0].approved
+    # a genuinely short target is still rejected
+    assert not size_signals([sig("T", low=21.91, high=22.81, stop=21.22, target=24.40)], cfg, account=100_000)[0].approved

@@ -32,10 +32,11 @@ cite every number, and say plainly when data is missing or a skill is underperfo
 | `core/simulate.py` | Shared trade simulator (entry fills, stops, targets, time stops, optional trailing exits). Used by the backtest AND the journal so both apply identical rules. |
 | `core/risk.py` | risk-and-sizing: fixed-% risk sizing, position cap, 2:1 min R:R, max positions, sector cap, correlation check. CLI sizes Signal JSON files and can log them. |
 | `core/journal.py` | Paper-trade journal (SQLite `data/journal.sqlite`, table `paper_trades`): log ideas, mark outcomes, stats per skill / setup / signal. |
+| `config/committee_jurisdiction.yaml` | **Curated** committee → agencies / sectors / industries map (House Rule X, Senate Rule XXV). Editable; reports label links built from it. |
 | `config/local.yaml` | **Gitignored** personal overrides (account size). Merged over `settings.yaml` by `settings()`. |
 | `core/fundamentals.py` | Shared fundamental checks: YoY growth, deceleration, estimate revisions, earnings proximity. Missing data = `passed=None`, never a guess. |
-| `scanners/<skill>/` | Python behind each skill (importable, tested). `scanners/breakout/`: `setups.py` (causal features, gates, plans, score), `scan.py`, `backtest.py`, `experiments.py` (exit/entry variants, read-only). `scanners/catalyst/`: `history.py` (past earnings reactions), `plays.py` (scores, plays, plans, drift, lockups), `scan.py`. |
-| `core/providers/` | One module per data source, each with disk cache (`DiskCache`) + rate limiting (`RateLimiter`). `earnings_calendar.py` = Nasdaq earnings calendar; yfinance provider also has `earnings_history`, `implied_move`, `estimates`, `profile`. |
+| `scanners/<skill>/` | Python behind each skill (importable, tested). `scanners/breakout/`: `setups.py` (causal features, gates, plans, score), `scan.py`, `backtest.py`, `experiments.py` (exit/entry variants, read-only). `scanners/catalyst/`: `history.py` (past earnings reactions), `plays.py` (scores, plays, plans, drift, lockups), `scan.py`. `scanners/political/`: `screen.py` (Step A copy-trade screen), `oversight.py` (committee links), `score.py`, `scan.py`. |
+| `core/providers/` | One module per data source, each with disk cache (`DiskCache`) + rate limiting (`RateLimiter`). `earnings_calendar.py` = Nasdaq earnings calendar; yfinance provider also has `earnings_history`, `implied_move`, `estimates`, `profile`. `house_disclosures.py` = House PTR index + PDF parser; `congress.py` = members/committees; `usaspending.py` = federal contracts; `edgar.py` also parses Form 4 open-market buys. |
 | `.claude/skills/` | One `SKILL.md` per skill; each calls into `scanners/` and `core/`. |
 | `data/cache/` | Provider cache (gitignored). Delete a subfolder to force a refetch. |
 | `data/journal.sqlite` | Paper-trade history (gitignored). Back it up; it is the only record of paper results. |
@@ -77,6 +78,7 @@ uv run python -m core.risk --set-account 5000           # stored in config/local
 uv run python -m core.risk --signals reports/breakout-YYYY-MM-DD.json --log   # size + journal
 uv run python -m core.journal update|list|summary       # paper-trade outcomes and stats
 uv run python -m scanners.catalyst.scan                 # earnings plays + drift (~10 min cold, seconds when cached)
+uv run python -m scanners.political.scan                # House PTRs (~15 min first run: ~1,000 PDFs, cached forever)
 ```
 
 ## Environment variables
@@ -94,7 +96,7 @@ uv run python -m scanners.catalyst.scan                 # earnings plays + drift
 - [x] Stage 2: `breakout-scanner` + `backtest.py`
 - [x] Stage 3: `risk-and-sizing` + `journal.py` (+ `core/simulate.py` shared by backtest and journal)
 - [x] Stage 4: `catalyst-plays` (earnings plays, post-earnings drift, lockup / offering flags)
-- [ ] Stage 5: `political-edge` (InsiderCat MCP is connected in Claude Code sessions)
+- [x] Stage 5: `political-edge` — House PTRs parsed from PDFs (InsiderCat has no active plan; user chose the free route)
 - [ ] Stage 6: `momentum-hype`
 - [ ] Stage 7: `run-all-scans` (+ `regime.py`) and `review-performance`
 
@@ -124,4 +126,21 @@ uv run python -m scanners.catalyst.scan                 # earnings plays + drift
   estimates up after the report). Lockups are estimated as first trade + 180 days. Offering checks need SEC_USER_AGENT.
 - Implied earnings move = ATM straddle with 60-day realized daily variance removed for the other sessions to
   expiry (`plays.event_implied_move`). Session counts use weekdays and ignore exchange holidays (e.g. Thanksgiving).
+- political-edge data: InsiderCat MCP is connected but the account has no active plan (tools return no data);
+  the user chose free parsing of House PTR PDFs (2026-11-16). Scanned paper PTRs have no text and are skipped.
+  Senate eFD needs the user's OK to accept its terms. Not yet covered: lobbying (LDA API was down), FEC money,
+  testimony, visitor logs, bills / hearings (congress.gov key), Trump admin / mentions / sponsors (InsiderCat only),
+  "leaving office". Personal, non-commercial use only (5 U.S.C. 13107).
+- political-edge performance is copy-trade from disclosed trades (amount midpoints, trade-date prices; delay-adjusted
+  = filing-date prices), vs SPY with identical cash flows. "Portfolio size" is the PTR-traded book, not net worth,
+  so the $1M test is conservative and many members rely on the documented exceptions.
 
+- political-edge first run (2026-11-16): 987 House PTRs for 2025–2026; all 863 e-filed parsed (11,452 transactions,
+  9,653 with the account named), 124 scanned paper filings skipped. 69 members traded in the last year; 3 qualify
+  (Franklin, Taylor, Moore; two via the small-portfolio exceptions). Same-day duplicate rows are real: the same
+  stock bought in two accounts (e.g. a 401(k) and a joint brokerage). 61 traded tickers have no Yahoo prices
+  (delisted / renamed / typos in filings) and are counted as unpriced, not guessed.
+- "Direct" links from contracts include broad government vendors (e.g. AT&T: committee agencies = 12% of its
+  federal contract $); these keep the spec's DIRECT label but carry a "broad government vendor" flag.
+- risk-and-sizing tolerates cent-rounding in R:R exactly (`core.risk.rounding_slack`), so a 2R plan on a low-priced
+  stock (rounded to 1.99) is not rejected while genuinely short targets still are.

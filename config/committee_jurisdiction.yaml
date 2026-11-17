@@ -1,0 +1,97 @@
+# Committee -> oversight map used by political-edge (Step B/C).
+#
+# CURATED, COARSE, EDITABLE. Built from the jurisdiction clauses of House Rule X (clause 1) and Senate Rule XXV.
+# Every classification that uses this file is labeled "curated jurisdiction map" in reports.
+#
+#   agencies:   USAspending awarding agency / sub-agency names. A company with contract obligations from one of
+#               these agencies has a DIRECT link to members of the committee.
+#   sectors:    Yahoo Finance sector names fully under the committee's jurisdiction  -> SECTOR link
+#   industries: Yahoo Finance industry names under the committee's jurisdiction      -> SECTOR link
+#   broad:      true = jurisdiction spans the whole government (e.g. Appropriations): contracts count as DIRECT,
+#               but no sector-level link is inferred.
+# Subcommittees inherit their parent committee's entry unless listed separately.
+
+house:
+  HSAG:  # Agriculture
+    agencies: [Department of Agriculture, Commodity Futures Trading Commission]
+    industries: [Farm Products, Agricultural Inputs, Farm & Heavy Construction Machinery, Packaged Foods,
+                 Food Distribution, Lumber & Wood Production, Tobacco, Confectioners]
+  HSAP:  # Appropriations
+    broad: true
+  HSAS:  # Armed Services
+    agencies: [Department of Defense, National Nuclear Security Administration]
+    industries: [Aerospace & Defense]
+  HSBA:  # Financial Services
+    agencies: [Department of the Treasury, Department of Housing and Urban Development, Securities and Exchange Commission,
+               Federal Deposit Insurance Corporation, Federal Housing Finance Agency]
+    sectors: [Financial Services]
+    industries: [REIT - Mortgage, Mortgage Finance]
+  HSED:  # Education and Workforce
+    agencies: [Department of Education, Department of Labor]
+    industries: [Education & Training Services, Staffing & Employment Services]
+  HSIF:  # Energy and Commerce
+    agencies: [Department of Energy, Department of Health and Human Services, Federal Communications Commission,
+               Federal Trade Commission, Environmental Protection Agency, Department of Commerce, Nuclear Regulatory Commission,
+               Food and Drug Administration, Centers for Medicare and Medicaid Services]
+    sectors: [Healthcare, Energy, Utilities, Communication Services]
+  HSFA:  # Foreign Affairs
+    agencies: [Department of State, Agency for International Development]
+    industries: [Aerospace & Defense]
+  HSGO:  # Oversight and Government Reform
+    agencies: [Office of Personnel Management, General Services Administration]
+  HSHM:  # Homeland Security
+    agencies: [Department of Homeland Security]
+    industries: [Security & Protection Services]
+  HSII:  # Natural Resources
+    agencies: [Department of the Interior]
+    industries: [Oil & Gas E&P, Oil & Gas Integrated, Gold, Silver, Copper, Other Industrial Metals & Mining,
+                 Other Precious Metals & Mining, Thermal Coal, Coking Coal, Uranium, Lumber & Wood Production]
+  HSJU:  # Judiciary
+    agencies: [Department of Justice]
+  HSPW:  # Transportation and Infrastructure
+    agencies: [Department of Transportation, U.S. Army Corps of Engineers, Federal Emergency Management Agency]
+    industries: [Airlines, Airports & Air Services, Railroads, Trucking, Marine Shipping, Engineering & Construction,
+                 Infrastructure Operations, Integrated Freight & Logistics, Building Materials]
+  HSSY:  # Science, Space, and Technology
+    agencies: [National Aeronautics and Space Administration, National Science Foundation,
+               National Institute of Standards and Technology]
+    industries: [Aerospace & Defense, Scientific & Technical Instruments]
+  HSSM:  # Small Business
+    agencies: [Small Business Administration]
+  HSVR:  # Veterans' Affairs
+    agencies: [Department of Veterans Affairs]
+    industries: [Medical Care Facilities, Health Information Services]
+  HSWM:  # Ways and Means
+    agencies: [Department of the Treasury, Social Security Administration, Centers for Medicare and Medicaid Services]
+    industries: [Healthcare Plans, Medical Care Facilities]
+  HLIG:  # Permanent Select Committee on Intelligence
+    agencies: [Office of the Director of National Intelligence, Department of Defense]
+    industries: [Aerospace & Defense]
+  HSZS:  # Select Committee on the CCP (no legislative jurisdiction: sector context only)
+    industries: [Semiconductors, Semiconductor Equipment & Materials]
+
+senate:
+  SSAF: {agencies: [Department of Agriculture, Commodity Futures Trading Commission],
+         industries: [Farm Products, Agricultural Inputs, Farm & Heavy Construction Machinery, Packaged Foods, Food Distribution]}
+  SSAP: {broad: true}
+  SSAS: {agencies: [Department of Defense, National Nuclear Security Administration], industries: [Aerospace & Defense]}
+  SSBK: {agencies: [Department of the Treasury, Department of Housing and Urban Development, Securities and Exchange Commission,
+                    Federal Deposit Insurance Corporation], sectors: [Financial Services]}
+  SSCM: {agencies: [Department of Commerce, Department of Transportation, Federal Communications Commission,
+                    Federal Trade Commission, National Aeronautics and Space Administration],
+         sectors: [Communication Services], industries: [Airlines, Railroads, Trucking, Marine Shipping, Aerospace & Defense]}
+  SSEG: {agencies: [Department of Energy, Department of the Interior], sectors: [Energy],
+         industries: [Utilities - Regulated Electric, Uranium, Gold, Copper, Other Industrial Metals & Mining]}
+  SSEV: {agencies: [Environmental Protection Agency, U.S. Army Corps of Engineers, Federal Highway Administration],
+         industries: [Waste Management, Engineering & Construction, Building Materials]}
+  SSFI: {agencies: [Department of the Treasury, Social Security Administration, Centers for Medicare and Medicaid Services],
+         industries: [Healthcare Plans, Medical Care Facilities]}
+  SSFR: {agencies: [Department of State, Agency for International Development], industries: [Aerospace & Defense]}
+  SSHR: {agencies: [Department of Health and Human Services, Department of Labor, Department of Education,
+                    Food and Drug Administration], sectors: [Healthcare], industries: [Education & Training Services]}
+  SSGA: {agencies: [Department of Homeland Security, General Services Administration, Office of Personnel Management],
+         industries: [Security & Protection Services]}
+  SSJU: {agencies: [Department of Justice]}
+  SSVA: {agencies: [Department of Veterans Affairs], industries: [Medical Care Facilities, Health Information Services]}
+  SLIN: {agencies: [Office of the Director of National Intelligence, Department of Defense], industries: [Aerospace & Defense]}
+  SSSB: {agencies: [Small Business Administration]}

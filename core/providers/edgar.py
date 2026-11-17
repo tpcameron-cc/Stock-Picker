@@ -6,6 +6,7 @@ var named in settings (providers.edgar.user_agent_env), and <= 10 requests/secon
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 
 import pandas as pd
@@ -20,6 +21,29 @@ SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik:010d}.json"
 
 class EdgarUnavailable(RuntimeError):
     pass
+
+
+def parse_form4_purchases(xml_text: str) -> list[dict]:
+    """Open-market purchases (non-derivative, transactionCode P) from a Form 4 XML document. Pure function."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(xml_text.encode("utf-8") if isinstance(xml_text, str) else xml_text)
+    except ET.ParseError:
+        return []
+    owner = (root.findtext(".//reportingOwner/reportingOwnerId/rptOwnerName") or "").strip()
+    out = []
+    for t in root.findall(".//nonDerivativeTable/nonDerivativeTransaction"):
+        if (t.findtext("./transactionCoding/transactionCode") or "").strip() != "P":
+            continue
+        try:
+            shares = float(t.findtext("./transactionAmounts/transactionShares/value") or 0)
+            price = float(t.findtext("./transactionAmounts/transactionPricePerShare/value") or 0)
+        except ValueError:
+            continue
+        out.append({"owner": owner, "trade_date": (t.findtext("./transactionDate/value") or "").strip(),
+                    "shares": shares, "price": price, "value": shares * price})
+    return out
 
 
 class EdgarProvider:
@@ -73,6 +97,32 @@ class EdgarProvider:
             return df.drop(columns="primary_doc")
 
         return self.cache.get_or_fetch(f"filings|{cik}", self.ttl, fetch).value
+
+    def insider_open_market_buys(self, ticker: str, lookback_days: int, today: date | None = None,
+                                 max_filings: int = 20) -> pd.DataFrame:
+        """Open-market purchases (Form 4, transaction code P) filed in the lookback window.
+        Columns: filing_date, owner, trade_date, shares, price, value, url. Reads up to `max_filings` Form 4s."""
+        cols = ["filing_date", "owner", "trade_date", "shares", "price", "value", "url"]
+        df = self.recent_filings(ticker)
+        cutoff = (today or date.today()) - timedelta(days=lookback_days)
+        f4 = df[(df["form"] == "4") & (df["filing_date"] >= cutoff)].head(max_filings)
+        rows = []
+        for r in f4.itertuples():
+            # primaryDocument is the XSL-rendered path (e.g. xslF345X05/x.xml); the raw XML sits one level up.
+            raw_url = re.sub(r"/xslF345X\d+/", "/", r.url)
+
+            def fetch(u=raw_url) -> str:
+                if not self.user_agent:
+                    raise EdgarUnavailable("SEC_USER_AGENT not set")
+                self.limiter.wait()
+                resp = requests.get(u, headers={"User-Agent": self.user_agent}, timeout=30)
+                resp.raise_for_status()
+                return resp.text
+
+            xml = self.cache.get_or_fetch(f"form4|{raw_url}", 24 * 3650, fetch).value
+            for t in parse_form4_purchases(xml):
+                rows.append({"filing_date": r.filing_date, **t, "url": r.url})
+        return pd.DataFrame(rows, columns=cols)
 
     def dilutive_filings(self, ticker: str, forms: list[str], lookback_days: int,
                          today: date | None = None) -> pd.DataFrame:

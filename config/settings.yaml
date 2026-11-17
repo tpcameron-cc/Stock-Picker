@@ -75,6 +75,60 @@ catalyst:
   output_top_n: 20
 
 # ---------------------------------------------------------------------------
+# Skill 1: political-edge (House PTRs parsed from the Clerk's PDFs; Senate not yet covered)
+# ---------------------------------------------------------------------------
+political:
+  years_back: 2                  # PTR filing years to ingest (2 = this year + last; 4 enables the 3Y window)
+  house:
+    min_seconds_between_calls: 0.5
+  jurisdiction_file: config/committee_jurisdiction.yaml
+
+  screen:                        # Step A: which members' trades to follow
+    window_days: 365             # main performance window (1Y)
+    window_days_long: 1095       # 3Y, shown only if enough filing years are ingested
+    reliability_max_gap_pp: 5    # |copy-trade return - delay-adjusted return| <= 5 percentage points
+    min_portfolio_usd: 1000000   # estimated PTR-traded portfolio (amount-range midpoints, marked to market)
+    min_trades: 10               # stock/option trades in the window
+    max_median_filing_delay: 30  # days from trade to filing
+    late_filing_days: 45         # STOCK Act deadline
+    max_late_share: 0.20         # > 20% of trades filed after 45 days = chronic late filer (excluded)
+    options_heavy_share: 0.30    # >= 30% option trades -> flagged
+    exception_min_excess_pp: 10  # small portfolios kept if they beat SPY by >= 10pp...
+    exception_min_top_weight: 0.40  # ...or have an unusual allocation (top position >= 40% of the book)
+    reference_exceptions: [Wasserman Schultz, Fetterman]   # user's examples; reported on whenever present
+
+  purchases:
+    lookback_days: 90            # Step C: classify purchases from the last 90 days
+    contracts_lookback_days: 730 # federal contract obligations considered for DIRECT links
+    min_contract_usd: 10000000   # >= $10M obligated by a member's committee agencies = DIRECT
+    broad_vendor_share: 0.25     # if those agencies are < 25% of the company's federal contract $, flag "broad vendor"
+    timing_window_days: 30       # trade within 30 days before a related contract action -> timing flag
+    min_timing_action_usd: 5000000
+    require_overlap: true        # only DIRECT / SECTOR purchases become Signals (NONE listed for context)
+
+  scoring:
+    direct: 40
+    sector: 20
+    agreement_per_member: 10     # other qualifying members buying the same name in the lookback
+    agreement_max: 20
+    size_max: 15                 # scaled on a log scale from $1k to size_full_usd
+    size_full_usd: 250000
+    recency_max: 10              # full points within 30 days of the trade, 0 at the lookback limit
+    recency_full_days: 30
+    insider_cluster: 10          # corporate insiders' open-market buys (Form 4, needs SEC_USER_AGENT)
+    late_filing_penalty: 10      # this trade filed > max_median_filing_delay days after the trade
+    move_penalty_start: 0.15     # price already up > 15% since disclosure -> penalty...
+    move_penalty_max: 15         # ...scaling to -15 at +30%
+    min_score: 40
+
+  plan:
+    entry_zone_pct: 0.02
+    atr_stop_mult: 2.0
+    max_stop_pct: 0.15
+    target_r: 2.0                # no measured target for a disclosure signal: 2R, labeled
+    horizon_days: 60
+
+# ---------------------------------------------------------------------------
 # Skill 5: risk-and-sizing (paper sizing only; nothing here places orders)
 # ---------------------------------------------------------------------------
 risk:

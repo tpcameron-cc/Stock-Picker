@@ -178,8 +178,8 @@ class YFinanceProvider:
         return {**item.value, "fetched_at": item.fetched_at}
 
     def profile(self, ticker: str) -> dict | None:
-        """{sector, first_trade_date} from Yahoo profile data; None on failure. Cached 7 days (failures aren't)."""
-        key = f"profile|{ticker.upper()}"
+        """{sector, industry, first_trade_date} from Yahoo profile data; None on failure. Cached 7 days (failures aren't)."""
+        key = f"profile2|{ticker.upper()}"
         hit = self.cache.get(key, 24 * 7)
         if hit is not None:
             return hit.value
@@ -190,7 +190,7 @@ class YFinanceProvider:
         except Exception:
             return None                      # transient failure: don't cache, try again next time
         ms = info.get("firstTradeDateMilliseconds")
-        prof = {"sector": info.get("sector") or None,
+        prof = {"sector": info.get("sector") or None, "industry": info.get("industry") or None,
                 "first_trade_date": pd.Timestamp(ms, unit="ms").date() if ms else None}
         if prof["sector"] or prof["first_trade_date"]:
             self.cache.put(key, prof)

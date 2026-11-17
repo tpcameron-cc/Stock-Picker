@@ -59,6 +59,14 @@ def position_size(account: float, risk_pct: float, entry: float, stop: float, ma
     return (by_cap, True) if by_cap < by_risk else (by_risk, False)
 
 
+def rounding_slack(s: Signal) -> float:
+    """Largest R:R error that rounding the plan's prices to whole cents can cause: each of entry mid, stop and
+    target moves by <= $0.005, so dRR <= 0.01 * (1 + RR) / (mid - stop). On a $22 stock with a $1 risk that's
+    ~0.03, enough to turn an exact 2R plan into 1.99."""
+    risk = s.entry_mid - s.stop
+    return 0.01 * (1 + s.reward_risk) / risk if risk > 0 else 0.0
+
+
 def max_correlation(candidate: pd.Series | None, book: dict[str, pd.Series], lookback: int
                     ) -> tuple[float | None, str | None]:
     """Highest correlation of daily returns between the candidate and any book position over `lookback` days."""
@@ -104,7 +112,7 @@ def size_signals(signals: Iterable[Signal], cfg: Settings, existing: list[dict] 
         if exempt:
             d.flags.append(f"R:R rule exempt ({setup}, R:R {s.reward_risk:.2f}): qualified on historical odds, "
                            f"sized at {float(r['rr_exempt_size_multiplier']):.0%}")
-        elif round(s.reward_risk, 2) < float(r["min_reward_risk"]):   # cents rounding can't fail an exact 2R plan
+        elif s.reward_risk + rounding_slack(s) < float(r["min_reward_risk"]):   # cents rounding can't fail a 2R plan
             d.reasons.append(f"R:R {s.reward_risk:.2f} < {float(r['min_reward_risk']):g}")
         if any(p["ticker"] == s.ticker for p in book):
             d.reasons.append("already in the book (open or pending)")

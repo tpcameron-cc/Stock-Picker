@@ -155,7 +155,7 @@ def attach_risk_flags(table: pd.DataFrame, price_provider, edgar_provider, cfg: 
 
 def build_universe(cfg: Settings | None = None, source: str | None = None, limit: int | None = None,
                    use_edgar: bool | None = None, price_provider=None, directory_provider=None,
-                   edgar_provider=None) -> UniverseResult:
+                   edgar_provider=None, tickers: list[str] | None = None) -> UniverseResult:
     from core.providers.nasdaqtrader import NasdaqTraderProvider
     from core.providers.yfinance_provider import YFinanceProvider
 
@@ -165,7 +165,8 @@ def build_universe(cfg: Settings | None = None, source: str | None = None, limit
     directory_provider = directory_provider or NasdaqTraderProvider(cfg)
 
     directory = directory_provider.directory()
-    only = cfg.get("universe.tickers") if source == "list" else None
+    # An explicit ticker list (e.g. names politicians bought) still goes through every filter.
+    only = tickers if tickers is not None else (cfg.get("universe.tickers") if source == "list" else None)
     cands = select_candidates(directory, cfg, only=only)
     if limit:
         cands = cands.head(limit)
