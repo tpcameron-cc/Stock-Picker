@@ -16,6 +16,7 @@ import json
 import sqlite3
 from contextlib import closing
 from datetime import date, datetime, timezone
+from datetime import time as dtime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterable
@@ -25,7 +26,8 @@ import pandas as pd
 
 from core.config import Settings, settings as default_settings
 from core.signals import Signal
-from core.simulate import simulate_trade
+from core.providers.yfinance_provider import NY
+from core.simulate import entry_mode, simulate_trade
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS paper_trades (
@@ -131,9 +133,26 @@ def open_positions(path: str | Path) -> pd.DataFrame:
 # Outcomes
 # ---------------------------------------------------------------------------
 
+MARKET_OPEN = dtime(9, 30)
+
+
+def earliest_fill_index(index: pd.DatetimeIndex, logged_at) -> int:
+    """First daily bar a paper order could really have been placed for, given when the idea was LOGGED:
+    logged before 9:30 ET -> that day's session can fill; logged later (e.g. an evening run) -> the next session.
+    Missing timestamp -> no restriction (0)."""
+    if logged_at is None or (isinstance(logged_at, float) and pd.isna(logged_at)) or logged_at == "":
+        return 0
+    ts = pd.Timestamp(logged_at)
+    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts
+    et = ts.tz_convert(NY)
+    day = pd.Timestamp(et.date())
+    return int(index.searchsorted(day, side="left" if et.time() < MARKET_OPEN else "right"))
+
+
 def evaluate_row(row: dict, df: pd.DataFrame, spy_close: pd.Series | None, pending_days: int,
                  slippage: float, same_bar_rule: str) -> dict:
-    """Recompute one trade's state from daily bars `df` (must include the signal date). Pure function."""
+    """Recompute one trade's state from daily bars `df` (must include the signal date). Pure function.
+    Fills can't happen before the first session after the idea was logged (see earliest_fill_index)."""
     sd = pd.Timestamp(row["signal_date"])
     pos = df.index.searchsorted(sd, side="right") - 1
     if pos < 0 or df.index[pos].normalize() != sd.normalize():
@@ -142,12 +161,15 @@ def evaluate_row(row: dict, df: pd.DataFrame, spy_close: pd.Series | None, pendi
     plan = SimpleNamespace(setup=row["setup"] or "", entry_low=row["entry_low"], entry_high=row["entry_high"],
                            stop=row["stop"], target=row["target"], cancel_below=row["cancel_below"],
                            entry_mode=row["entry_mode"])
-    res = simulate_trade(o, h, l, c, pos, plan, pending_days, int(row["horizon_days"]), slippage, same_bar_rule)
+    earliest = earliest_fill_index(df.index, row.get("logged_at"))
+    res = simulate_trade(o, h, l, c, pos, plan, pending_days, int(row["horizon_days"]), slippage, same_bar_rule,
+                         earliest_fill=earliest)
     out = {"fill_date": None, "fill_price": None, "exit_date": None, "exit_price": None, "exit_reason": None,
            "r_multiple": None, "return_pct": None, "spy_return": None}
     if res is None:
-        bars_after = len(df) - 1 - pos
-        out["status"] = "expired" if bars_after >= pending_days else "pending"
+        start = max(pos + 1, earliest)
+        window = pending_days if entry_mode(plan) == "buy_stop" else 1   # next-open orders get one chance
+        out["status"] = "expired" if len(df) - start >= window else "pending"
         return out
     fi, xi, fpx, xpx, reason = res
     risk = fpx - row["stop"]

@@ -1,3 +1,4 @@
+from datetime import date
 import json
 
 import numpy as np
@@ -51,7 +52,20 @@ def test_log_rejected_can_be_skipped(db):
     assert list(journal.read(db)["ticker"]) == ["AAA"]
 
 
+EVENING_OF_SIGNAL = "2026-01-02T22:00:00+00:00"     # 5 pm ET on the signal date: earliest fill = next session
+
+
+def backdate(db, iso=EVENING_OF_SIGNAL):
+    """Fixtures use January bars; pretend the ideas were logged that evening, as a real run would."""
+    import sqlite3
+    con = sqlite3.connect(db)
+    with con:
+        con.execute("UPDATE paper_trades SET logged_at = ?", (iso,))
+    con.close()
+
+
 def row_for(db, ticker):
+    backdate(db)
     return journal.read(db, "ticker = ?", (ticker,)).iloc[0].to_dict()
 
 
@@ -101,6 +115,7 @@ class FakeProvider:
 
 def test_update_outcomes_writes_db(db, cfg):
     journal.log_signals(db, [sig("AAA"), sig("BBB", stop=99)], {"AAA": approve("AAA")})
+    backdate(db)
     df = bars([(99, 100, 98, 100), (101, 103, 100, 102), (103, 116, 102, 114)])
     loser = bars([(99, 100, 98, 100), (100.5, 101, 98, 98.5)])
     spy = bars([(400, 401, 399, 400), (400, 405, 399, 404), (404, 409, 403, 408)])
@@ -139,3 +154,44 @@ def test_performance_taken_only():
                       "spy_return": [0.0, 0.0], "exit_reason": ["target", "stop"], "signals_hit": ["[]", "[]"]})
     assert journal.performance(t)["overall"].loc["ALL", "trades"] == 1
     assert journal.performance(t, taken_only=False)["overall"].loc["ALL", "trades"] == 2
+
+
+
+def test_earliest_fill_index_rules():
+    idx = pd.bdate_range("2026-11-12", periods=6)          # Thu 12 .. Thu 19
+    assert journal.earliest_fill_index(idx, "2026-11-17T01:30:00+00:00") == 3   # Mon 16 20:30 ET -> Tue 17 (index 3)
+    assert idx[journal.earliest_fill_index(idx, "2026-11-17T01:30:00+00:00")].date() == date(2026, 11, 17)
+    assert idx[journal.earliest_fill_index(idx, "2026-11-16T13:00:00+00:00")].date() == date(2026, 11, 16)  # 8 am ET
+    assert idx[journal.earliest_fill_index(idx, "2026-11-16T15:00:00+00:00")].date() == date(2026, 11, 17)  # 10 am ET
+    assert journal.earliest_fill_index(idx, None) == 0
+
+
+def test_no_fill_on_a_session_that_happened_before_the_idea_was_logged(db):
+    """The 2026-11-16 case: an idea built on Friday's bar but logged Monday evening must not fill at Monday's open."""
+    journal.log_signals(db, [sig(as_of="2026-01-02")], {"AAA": approve("AAA")})
+    backdate(db, "2026-01-06T01:00:00+00:00")             # Mon Jan 5, 8 pm ET
+    row = journal.read(db).iloc[0].to_dict()
+    # Fri 2 signal; Mon 5 opens 101 (would have filled); Tue 6 opens 106 (above the 105 zone -> no fill)
+    df = bars([(99, 100, 98, 100), (101, 103, 100, 102), (106, 108, 105, 107)])
+    out = journal.evaluate_row(row, df, None, 5, 0.0, "stop_first")
+    assert out["fill_date"] is None and out["status"] == "expired"          # next-open idea: one real chance, missed
+    # same idea, Tuesday opens inside the zone -> fills Tuesday, never Monday
+    df = bars([(99, 100, 98, 100), (101, 103, 100, 102), (104, 105, 103, 104.5)])
+    out = journal.evaluate_row(row, df, None, 5, 0.0, "stop_first")
+    assert out["fill_date"] == "2026-01-06" and out["fill_price"] == 104
+    # Tuesday's bar not published yet -> still pending
+    assert journal.evaluate_row(row, df.iloc[:2], None, 5, 0.0, "stop_first")["status"] == "pending"
+
+
+def test_buy_stop_window_starts_after_logging_and_base_undercut_cancels(db):
+    p = sig(setup="pre_breakout", entry_mode="buy_stop", cancel=90, stop=97)
+    journal.log_signals(db, [p], {"AAA": approve("AAA")})
+    backdate(db, "2026-01-06T01:00:00+00:00")             # logged Mon Jan 5 evening
+    row = journal.read(db).iloc[0].to_dict()
+    # Monday traded through the 100 trigger (before the idea existed): must NOT count as a fill
+    df = bars([(96, 97, 95, 96), (99, 101, 98, 99.5), (99, 100.5, 98.5, 100)])
+    out = journal.evaluate_row(row, df, None, 5, 0.0, "stop_first")
+    assert out["fill_date"] == "2026-01-06" and out["fill_price"] == 100
+    # base undercut on Monday (before the order existed) cancels it
+    df = bars([(96, 97, 95, 96), (95, 96, 89, 92), (99, 101, 98, 100)])
+    assert journal.evaluate_row(row, df, None, 5, 0.0, "stop_first")["fill_date"] is None

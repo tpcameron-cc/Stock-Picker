@@ -65,6 +65,12 @@ cite every number, and say plainly when data is missing or a skill is underperfo
 - Personal values (account size) live in `config/local.yaml`, never in `settings.yaml`. Tests load
   `settings.yaml` explicitly (`load_settings(DEFAULT_SETTINGS)`) so they never see personal overrides.
 - Journal outcomes are recomputed from prices until final; logging is idempotent per (signal_date, ticker, skill).
+- Paper fills can't happen before the idea existed: the earliest fill is the first session after the idea was
+  LOGGED (logged before 9:30 ET -> that day's session; an evening run -> the next session). `core.journal.
+  earliest_fill_index` -> `simulate_trade(earliest_fill=...)`. Next-open ideas get one chance at that open;
+  buy-stops get `journal.pending_days` sessions from it; a base undercut in between cancels a buy-stop. No need to
+  run anything at the open. The backtest is unaffected (default: next bar). Added 2026-11-16 after the first
+  evening run, whose ideas were built on Friday bars and would otherwise have "filled" at Monday's open.
 - Daily bars cached before the most recent close are refetched (`last_close_cutoff`), except in --quick mode
   (`STOCKPICKER_STALE_OK=1`). Cache writes are atomic so parallel scanners can share `data/cache/`.
 - run-all-scans logs every skill's idea; only the sized, approved primary idea per ticker has taken = 1.

@@ -40,6 +40,8 @@ under `risk:` and `journal:`.
    uv run python -m core.journal summary    # win rate, expectancy, vs SPY per skill and per signal
    ```
    With fewer than ~30 closed trades per skill, say plainly that it's too early to judge.
+   Fills are simulated from daily bars after the fact; nothing needs to run at the open. An idea can't fill on any
+   session that began before it was logged (evening run -> earliest fill is the next session's open).
 
 ## Output
 - `reports/sizing-YYYY-MM-DD.md`: one row per idea (approved, R:R, entry, stop, shares, notional, risk $, sector,

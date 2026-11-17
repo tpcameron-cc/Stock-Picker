@@ -43,9 +43,15 @@ DEFAULT_EXITS = {
 def simulate_trade(o: np.ndarray, h: np.ndarray, l: np.ndarray, c: np.ndarray, i: int, plan: TradePlan,
                    pending_days: int, horizon: int, slippage: float = 0.0,
                    same_bar_rule: str = "stop_first", exits: dict | None = None,
-                   aux: dict[str, np.ndarray] | None = None) -> tuple[int, int, float, float, str] | None:
+                   aux: dict[str, np.ndarray] | None = None,
+                   earliest_fill: int | None = None) -> tuple[int, int, float, float, str] | None:
     """Simulate one plan signalled on bar i (decided at bar i's close). Returns
     (fill_idx, exit_idx, fill_px, exit_px, reason) or None if never filled.
+
+    earliest_fill: first bar an order could actually have been placed for (default i + 1). The journal sets it
+           to the first session after the idea was LOGGED, so an idea produced after a session never fills on that
+           session. Bars between the signal and earliest_fill can only cancel a pending buy-stop (base undercut);
+           an entry window (`pending_days`) starts at earliest_fill.
 
     Entry (see entry_mode): next_open -> next bar's open if it's inside (stop, entry_high];
            buy_stop -> buy-stop at entry_low for `pending_days` bars, fill max(open, entry_low);
@@ -67,13 +73,17 @@ def simulate_trade(o: np.ndarray, h: np.ndarray, l: np.ndarray, c: np.ndarray, i
     fill_idx = fill_px = None
     intrabar_fill = False
     mode = entry_mode(plan)
+    start = max(i + 1, earliest_fill if earliest_fill is not None else i + 1)
+    if mode == "buy_stop" and plan.cancel_below is not None:
+        if any(l[k] <= plan.cancel_below for k in range(i + 1, min(start, n))):
+            return None                                   # base undercut before the order could be placed
     if mode == "next_open":
-        j = i + 1
+        j = start
         if j < n and plan.stop < o[j] <= plan.entry_high:
             fill_idx, fill_px = j, o[j]
     elif ex["pre_breakout_entry"] == "confirm_close":
         rv = aux["rvol"]
-        for j in range(i + 1, min(i + 1 + pending_days, n)):
+        for j in range(start, min(start + pending_days, n)):
             if plan.cancel_below is not None and l[j] <= plan.cancel_below:
                 return None
             if c[j] > plan.entry_low and rv[j] >= float(ex["confirm_rvol"]):
@@ -81,7 +91,7 @@ def simulate_trade(o: np.ndarray, h: np.ndarray, l: np.ndarray, c: np.ndarray, i
                     fill_idx, fill_px = j + 1, o[j + 1]
                 break
     else:
-        for j in range(i + 1, min(i + 1 + pending_days, n)):
+        for j in range(start, min(start + pending_days, n)):
             if o[j] > plan.entry_high:
                 return None
             if h[j] >= plan.entry_low:
