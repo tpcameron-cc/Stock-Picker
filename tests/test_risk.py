@@ -134,3 +134,10 @@ def test_rounding_slack_on_low_priced_stock(cfg):
     assert size_signals([s], cfg, account=100_000)[0].approved
     # a genuinely short target is still rejected
     assert not size_signals([sig("T", low=21.91, high=22.81, stop=21.22, target=24.40)], cfg, account=100_000)[0].approved
+
+
+def test_setup_size_multiplier_for_hype(cfg):
+    s = sig("HYPE")                                     # $750 risk budget / $6 per share = 125 normally
+    s.metrics["setup"] = "momentum_hype"
+    d = size_signals([s], cfg, account=100_000)[0]
+    assert d.approved and d.shares == 62 and any("sized at 50%" in f for f in d.flags)

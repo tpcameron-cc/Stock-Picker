@@ -109,6 +109,10 @@ def size_signals(signals: Iterable[Signal], cfg: Settings, existing: list[dict] 
         setup = str(s.metrics.get("setup") or "")
         exempt = setup in set(r.get("rr_exempt_setups") or [])
         idea_mult = multiplier * (float(r["rr_exempt_size_multiplier"]) if exempt else 1.0)
+        setup_mult = float((r.get("setup_size_multipliers") or {}).get(setup, 1.0))
+        if setup_mult != 1.0:
+            idea_mult *= setup_mult
+            d.flags.append(f"{setup}: sized at {setup_mult:.0%} by default (higher-risk setup)")
         if exempt:
             d.flags.append(f"R:R rule exempt ({setup}, R:R {s.reward_risk:.2f}): qualified on historical odds, "
                            f"sized at {float(r['rr_exempt_size_multiplier']):.0%}")

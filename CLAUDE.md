@@ -35,11 +35,12 @@ cite every number, and say plainly when data is missing or a skill is underperfo
 | `config/committee_jurisdiction.yaml` | **Curated** committee → agencies / sectors / industries map (House Rule X, Senate Rule XXV). Editable; reports label links built from it. |
 | `config/local.yaml` | **Gitignored** personal overrides (account size). Merged over `settings.yaml` by `settings()`. |
 | `core/fundamentals.py` | Shared fundamental checks: YoY growth, deceleration, estimate revisions, earnings proximity. Missing data = `passed=None`, never a guess. |
-| `scanners/<skill>/` | Python behind each skill (importable, tested). `scanners/breakout/`: `setups.py` (causal features, gates, plans, score), `scan.py`, `backtest.py`, `experiments.py` (exit/entry variants, read-only). `scanners/catalyst/`: `history.py` (past earnings reactions), `plays.py` (scores, plays, plans, drift, lockups), `scan.py`. `scanners/political/`: `screen.py` (Step A copy-trade screen), `oversight.py` (committee links), `score.py`, `scan.py`. |
-| `core/providers/` | One module per data source, each with disk cache (`DiskCache`) + rate limiting (`RateLimiter`). `earnings_calendar.py` = Nasdaq earnings calendar; yfinance provider also has `earnings_history`, `implied_move`, `estimates`, `profile`. `house_disclosures.py` = House PTR index + PDF parser; `senate_disclosures.py` = Senate eFD PTRs (accepts the agreement); `congress.py` = members/committees; `usaspending.py` = federal contracts; `edgar.py` also parses Form 4 open-market buys. |
+| `scanners/<skill>/` | Python behind each skill (importable, tested). `scanners/breakout/`: `setups.py` (causal features, gates, plans, score), `scan.py`, `backtest.py`, `experiments.py` (exit/entry variants, read-only). `scanners/catalyst/`: `history.py` (past earnings reactions), `plays.py` (scores, plays, plans, drift, lockups), `scan.py`. `scanners/political/`: `screen.py` (Step A copy-trade screen), `oversight.py` (committee links), `score.py`, `scan.py`. `scanners/hype/`: `logic.py` (confirmation, late-stage, attention score, pump flags, plan), `scan.py`. |
+| `core/providers/` | One module per data source, each with disk cache (`DiskCache`) + rate limiting (`RateLimiter`). `earnings_calendar.py` = Nasdaq earnings calendar; yfinance provider also has `earnings_history`, `implied_move`, `estimates`, `profile`. `house_disclosures.py` = House PTR index + PDF parser; `senate_disclosures.py` = Senate eFD PTRs (accepts the agreement); `congress.py` = members/committees; `usaspending.py` = federal contracts; `edgar.py` also parses Form 4 open-market buys. `attention.py` = ApeWisdom / Tradestie / StockTwits / Google News RSS + daily snapshot store; yfinance provider has `squeeze_context`, `call_activity`. |
 | `.claude/skills/` | One `SKILL.md` per skill; each calls into `scanners/` and `core/`. |
 | `data/cache/` | Provider cache (gitignored). Delete a subfolder to force a refetch. |
 | `data/journal.sqlite` | Paper-trade history (gitignored). Back it up; it is the only record of paper results. |
+| `data/attention/` | Daily attention snapshots (gitignored, not re-downloadable). They build momentum-hype's 30-day mention baseline. |
 | `reports/` | Dated outputs (`universe-YYYY-MM-DD.csv`, later `YYYY-MM-DD.md/.csv`). |
 | `tests/` | pytest suite. |
 
@@ -79,6 +80,7 @@ uv run python -m core.risk --signals reports/breakout-YYYY-MM-DD.json --log   # 
 uv run python -m core.journal update|list|summary       # paper-trade outcomes and stats
 uv run python -m scanners.catalyst.scan                 # earnings plays + drift (~10 min cold, seconds when cached)
 uv run python -m scanners.political.scan                # House PTRs (~15 min first run: ~1,000 PDFs, cached forever)
+uv run python -m scanners.hype.scan                     # momentum-hype (run daily: builds the attention baseline)
 ```
 
 ## Environment variables
@@ -97,7 +99,7 @@ uv run python -m scanners.political.scan                # House PTRs (~15 min fi
 - [x] Stage 3: `risk-and-sizing` + `journal.py` (+ `core/simulate.py` shared by backtest and journal)
 - [x] Stage 4: `catalyst-plays` (earnings plays, post-earnings drift, lockup / offering flags)
 - [x] Stage 5: `political-edge` — House PTRs parsed from PDFs (InsiderCat has no active plan; user chose the free route)
-- [ ] Stage 6: `momentum-hype`
+- [x] Stage 6: `momentum-hype` (attention velocity + price confirmation; high risk, 50% size)
 - [ ] Stage 7: `run-all-scans` (+ `regime.py`) and `review-performance`
 
 ## Known limitations
@@ -152,3 +154,11 @@ uv run python -m scanners.political.scan                # House PTRs (~15 min fi
   filings keep only the latest copy (`screen.dedupe_cross_filing`; 133 Senate + 14 House rows on 2026-11-16).
   Repeats inside one filing are kept (separate accounts). Former members (e.g. Sen. Mullin, Sen. Carper) are not in
   the current-members file and are excluded.
+- momentum-hype data (2026-11-16): working free sources are ApeWisdom (Reddit/4chan mentions), Tradestie (r/wsb
+  comments), StockTwits trending, Google News RSS (max 100 items, throttles), Yahoo short interest and option chains.
+  Not available: Reddit API (403 without an app), Google Trends (no API), borrow fee (iBorrowDesk unreachable),
+  GDELT (persistent 429). Mention velocity is vs yesterday until 5+ daily snapshots exist (baseline floor 15
+  mentions; Monday-vs-Sunday flagged); common-word tickers flagged. First live run was a broad down day: 0 ideas
+  (64 of 68 attention names failed to hold gains into the close); a relaxed-gate verification run exercised the
+  news / options / short-interest / plan stages on live data. `risk.setup_size_multipliers` sizes hype at 50%.
+

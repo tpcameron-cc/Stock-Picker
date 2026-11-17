@@ -132,6 +132,59 @@ political:
     horizon_days: 60
 
 # ---------------------------------------------------------------------------
+# Skill 3: momentum-hype (attention accelerating AND price confirming; high risk by definition)
+# ---------------------------------------------------------------------------
+hype:
+  snapshot_dir: data/attention   # daily attention snapshots (gitignored); they build the 30-day baseline over time
+  baseline_days: 30              # mention baseline window once enough snapshots exist...
+  min_baseline_days: 5           # ...fewer snapshot days -> baseline = yesterday's count (flagged, lower confidence)
+  apewisdom_pages: 3             # Reddit/4chan mention leaderboard pages to read (100 tickers each)
+  min_mentions: 15               # ignore tickers with fewer Reddit mentions in the last 24h
+  baseline_floor: 15             # baseline never below 15 mentions: 92 vs 1 yesterday is noise, not a 92x surge
+  # Tickers that are everyday words: forum mention counts can be inflated by ordinary text -> flagged.
+  ambiguous_tickers: [AI, ALL, IT, NOW, ON, OPEN, GO, DD, EV, CEO, FUN, LOVE, BIG, ONE, ARE, SO, CAN, REAL, RUN,
+                      PLAY, CASH, GAIN, MOVE, KEY, LOW, HIGH, CAR, BE, AN, OR, HAS, BIT, NEW, BEST, TRUE, WELL, PEAK]
+  max_shortlist: 25              # confirmed names that get the slow checks (news, options, short interest)
+
+  attention:                     # points; total capped at 100
+    reddit_velocity: 30          # mentions / baseline, scaled from 1.5x (0) to 5x (max)
+    news_velocity: 25            # headlines today / 30-day daily average, scaled 1.5x -> 5x
+    stocktwits_trending: 20      # StockTwits trending rank 1 = max, rank 30 = ~0
+    wsb_comments: 10             # r/wallstreetbets comment count (log-scaled to 300); 0 if sentiment bearish
+    call_volume: 15              # near-dated call volume / call open interest, scaled 0.25 (0) -> 1.0 (max)
+    velocity_floor: 1.5
+    velocity_full: 5.0
+
+  confirm:                       # price must confirm the hype (all required)
+    sma_fast: 10
+    sma_slow: 20
+    rising_lookback: 3           # both averages higher than 3 sessions ago
+    min_rvol: 2.0                # today's volume >= 2x the prior 50-day average
+    close_in_range_min: 0.6      # close in the top 40% of the day's range ("holding gains into the close")
+
+  late_stage:                    # reject
+    max_atr_above_sma20: 3.0     # close more than 3 ATRs above the 20-day average
+    max_gain_5d: 1.00            # up more than 100% in 5 sessions
+    fade_ratio: 0.6              # mentions < 60% of their recent peak (or of yesterday) = attention past its peak
+
+  pump:                          # flag (and penalize); never silently pass
+    pennystocks_min_mentions: 5  # mentioned in r/pennystocks
+    min_market_cap: 300000000    # micro caps under $300M
+    penalty: 15                  # score points per pump flag
+    reject_on_flags: 2           # 2+ pump flags -> reject
+
+  squeeze:                       # context only
+    short_pct_float: 0.20
+    days_to_cover: 5
+
+  plan:
+    entry_zone_pct: 0.015
+    stop_atr_mult: 1.0           # tight stop: the higher of today's low and close - 1 ATR
+    target_rs: [2.0, 3.0]        # scale out: half at 2R, rest at 3R
+    time_stop_days: 5            # spec range 3-10 sessions
+  min_score: 40
+
+# ---------------------------------------------------------------------------
 # Skill 5: risk-and-sizing (paper sizing only; nothing here places orders)
 # ---------------------------------------------------------------------------
 risk:
@@ -144,6 +197,8 @@ risk:
   # they skip the R:R rule, qualify on historical odds (catalyst play rules), and are sized smaller.
   rr_exempt_setups: [earnings_run_up, earnings_hold_through]
   rr_exempt_size_multiplier: 0.5 # exempt ideas risk half the normal amount (0.375% of the account)
+  setup_size_multipliers:        # smaller default size for inherently riskier setups (stacks with the above)
+    momentum_hype: 0.5
   max_open_positions: 8          # open + pending paper trades in the journal count toward this
   max_per_sector: 2              # at most 2 positions per sector (unknown sector = flagged, not capped)
   correlation_lookback_days: 60  # daily-return correlation window vs existing positions

@@ -13,3 +13,4 @@ reports/*
 # Personal data
 config/local.yaml
 data/*.sqlite
+data/attention/

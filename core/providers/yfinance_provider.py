@@ -247,6 +247,52 @@ class YFinanceProvider:
             log.info("implied move unavailable for %s: %s", ticker, type(e).__name__)
             return None
 
+    def squeeze_context(self, ticker: str) -> dict | None:
+        """Short interest (% of float, days to cover, as-of date) and market cap from Yahoo. Cached 24h.
+        Borrow fee is NOT available from free sources."""
+        yf = self._yf()
+
+        def fetch() -> dict:
+            self.limiter.wait()
+            i = yf.Ticker(ticker).info or {}
+            ts = i.get("dateShortInterest")
+            return {"market_cap": i.get("marketCap"), "short_pct_float": i.get("shortPercentOfFloat"),
+                    "days_to_cover": i.get("shortRatio"), "shares_short": i.get("sharesShort"),
+                    "short_interest_date": pd.Timestamp(ts, unit="s").date().isoformat() if ts else None,
+                    "float_shares": i.get("floatShares")}
+
+        try:
+            return self.cache.get_or_fetch(f"squeeze|{ticker.upper()}", 24, fetch).value
+        except Exception as e:
+            log.info("squeeze context unavailable for %s: %s", ticker, type(e).__name__)
+            return None
+
+    def call_activity(self, ticker: str, expiries: int = 2) -> dict | None:
+        """Today's option activity over the nearest `expiries` expirations: call volume, call open interest,
+        put volume. Cached 6h."""
+        yf = self._yf()
+
+        def fetch() -> dict | None:
+            t = yf.Ticker(ticker)
+            self.limiter.wait()
+            exps = list(t.options or ())[:expiries]
+            if not exps:
+                return None
+            cv = coi = pv = 0.0
+            for e in exps:
+                self.limiter.wait()
+                ch = t.option_chain(e)
+                cv += float(ch.calls["volume"].fillna(0).sum())
+                coi += float(ch.calls["openInterest"].fillna(0).sum())
+                pv += float(ch.puts["volume"].fillna(0).sum())
+            return {"call_volume": cv, "call_oi": coi, "put_volume": pv, "expiries": exps}
+
+        try:
+            return self.cache.get_or_fetch(f"calls|{ticker.upper()}|{expiries}", 6, fetch).value
+        except Exception as e:
+            log.info("option activity unavailable for %s: %s", ticker, type(e).__name__)
+            return None
+
     def estimates(self, ticker: str) -> dict:
         """Just the consensus tables: {eps_trend, eps_revisions, errors}. Two calls instead of fundamentals()'
         five; reuses a fresh fundamentals() cache entry if one exists. Cached 24h."""
