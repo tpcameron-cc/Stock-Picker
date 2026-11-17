@@ -130,7 +130,20 @@ political:
     atr_stop_mult: 2.0
     max_stop_pct: 0.15
     target_r: 2.0                # no measured target for a disclosure signal: 2R, labeled
-    horizon_days: 60
+    horizon_days: 126            # ~6 months: disclosure ideas can take longer to play out (user, 2026-11-17)
+    entry_mode: limit            # buy when price trades into the entry zone (limit order at the top of the zone)...
+    entry_window_days: 10        # ...within 10 sessions of the first allowed session, else the idea expires
+
+  # Sell blacklist (user, 2026-11-17): a big sale by a qualifying member blocks the stock from the daily list.
+  blacklist:
+    enabled: true
+    days: 90                     # blocked for 90 calendar days from the sale's trade date
+    members: qualified           # only members who pass the Step A screen
+    min_amount_low_usd: 15001    # the reported sale range must start above $15,000
+    min_fraction: 0.75           # and the sale is >= 75% of their position: a FULL sale, or a partial sale whose
+                                 # amount is >= 75% of the position estimated from their own disclosed trades
+                                 # (range midpoints). Unknown position (bought before the data) -> no trigger.
+    file: data/political_blacklist.json   # latest list, read by run-all-scans (gitignored with data/)
 
 # ---------------------------------------------------------------------------
 # Skill 3: momentum-hype (attention accelerating AND price confirming; high risk by definition)

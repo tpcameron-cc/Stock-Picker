@@ -20,10 +20,11 @@ class TradePlan(Protocol):
 
 
 def entry_mode(plan) -> str:
-    """'buy_stop' (wait for price to trade up through entry_low) or 'next_open' (buy the next open in the zone).
+    """'buy_stop' (wait for price to trade up through entry_low), 'next_open' (buy the next open in the zone) or
+    'limit' (a limit buy at the top of the zone, working for `pending_days` sessions).
     A plan may set `entry_mode` explicitly; otherwise pre-breakouts are buy-stops and everything else next-open."""
     explicit = getattr(plan, "entry_mode", None)
-    if explicit in ("buy_stop", "next_open"):
+    if explicit in ("buy_stop", "next_open", "limit"):
         return explicit
     return "buy_stop" if plan.setup == "pre_breakout" else "next_open"
 
@@ -54,6 +55,8 @@ def simulate_trade(o: np.ndarray, h: np.ndarray, l: np.ndarray, c: np.ndarray, i
            an entry window (`pending_days`) starts at earliest_fill.
 
     Entry (see entry_mode): next_open -> next bar's open if it's inside (stop, entry_high];
+           limit -> limit buy at entry_high for `pending_days` bars: an open in or below the zone (above the stop)
+           fills at the open, a dip from above fills at entry_high; an open at or below the stop cancels;
            buy_stop -> buy-stop at entry_low for `pending_days` bars, fill max(open, entry_low);
            skipped if a bar opens above entry_high (gapped through the zone), cancelled if price undercuts
            `cancel_below` (the base low) before triggering. (Trading below the stop while still pending is
@@ -81,6 +84,18 @@ def simulate_trade(o: np.ndarray, h: np.ndarray, l: np.ndarray, c: np.ndarray, i
         j = start
         if j < n and plan.stop < o[j] <= plan.entry_high:
             fill_idx, fill_px = j, o[j]
+    elif mode == "limit":
+        # Limit buy at entry_high: an open inside the zone fills at the open; an open above it fills at entry_high
+        # if the day trades down to it. Price at or below the stop before any fill cancels the order.
+        for j in range(start, min(start + pending_days, n)):
+            if o[j] <= plan.stop:
+                return None
+            if o[j] <= plan.entry_high:
+                fill_idx, fill_px = j, o[j]
+                break
+            if l[j] <= plan.entry_high:
+                fill_idx, fill_px = j, plan.entry_high
+                break
     elif ex["pre_breakout_entry"] == "confirm_close":
         rv = aux["rvol"]
         for j in range(start, min(start + pending_days, n)):

@@ -149,6 +149,16 @@ def earliest_fill_index(index: pd.DatetimeIndex, logged_at) -> int:
     return int(index.searchsorted(day, side="left" if et.time() < MARKET_OPEN else "right"))
 
 
+def entry_window(row: dict, default: int) -> int:
+    """Sessions an entry order stays working: the idea's own `entry_window_days` metric if it set one (e.g.
+    political-edge's 10), else the journal default."""
+    try:
+        m = json.loads(row.get("signal_json") or "{}").get("metrics", {})
+        return int(m.get("entry_window_days") or default)
+    except (ValueError, TypeError, AttributeError):
+        return default
+
+
 def evaluate_row(row: dict, df: pd.DataFrame, spy_close: pd.Series | None, pending_days: int,
                  slippage: float, same_bar_rule: str) -> dict:
     """Recompute one trade's state from daily bars `df` (must include the signal date). Pure function.
@@ -162,13 +172,14 @@ def evaluate_row(row: dict, df: pd.DataFrame, spy_close: pd.Series | None, pendi
                            stop=row["stop"], target=row["target"], cancel_below=row["cancel_below"],
                            entry_mode=row["entry_mode"])
     earliest = earliest_fill_index(df.index, row.get("logged_at"))
+    pending_days = entry_window(row, pending_days)
     res = simulate_trade(o, h, l, c, pos, plan, pending_days, int(row["horizon_days"]), slippage, same_bar_rule,
                          earliest_fill=earliest)
     out = {"fill_date": None, "fill_price": None, "exit_date": None, "exit_price": None, "exit_reason": None,
            "r_multiple": None, "return_pct": None, "spy_return": None}
     if res is None:
         start = max(pos + 1, earliest)
-        window = pending_days if entry_mode(plan) == "buy_stop" else 1   # next-open orders get one chance
+        window = pending_days if entry_mode(plan) in ("buy_stop", "limit") else 1   # next-open: one chance
         out["status"] = "expired" if len(df) - start >= window else "pending"
         return out
     fi, xi, fpx, xpx, reason = res

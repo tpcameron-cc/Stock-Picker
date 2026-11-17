@@ -22,6 +22,7 @@ from core.config import Settings, settings as default_settings
 from core.providers.congress import match_member, match_senator
 from core.signals import Confidence, PriceZone, Signal, Source, lagging_data_flag, save_signals
 from core.universe import build_universe
+from scanners.political.blacklist import build_blacklist, reason as bl_reason, save_blacklist
 from scanners.political.oversight import classify, load_jurisdiction, member_oversight
 from scanners.political.score import score_purchase
 from scanners.political.screen import (
@@ -137,6 +138,15 @@ def run(cfg: Settings | None = None, price_provider=None, house=None, congress=N
             ref_notes.append(f"{ref}: " + ("Senate member — Senate trades not covered yet" if len(senate)
                                            else "no parsed House PTR trades in the window"))
 
+    # ---- Sell blacklist: big sales by qualifying members block the stock for N days ------------------------
+    B = P.get("blacklist", {}) or {}
+    blacklist = pd.DataFrame()
+    if B.get("enabled", True):
+        who = set(qualified["bioguide"]) if B.get("members", "qualified") == "qualified" else set(tx["bioguide"].dropna())
+        blacklist = build_blacklist(tx, who, price_as_of, B, names["full_name"].to_dict())
+        save_blacklist(blacklist, cfg.path_for("political.blacklist.file"), price_as_of)
+    bl_map = {r["ticker"]: r for r in blacklist.to_dict("records")} if len(blacklist) else {}
+
     # ---- Step C: classify qualifying members' recent purchases ---------------------------------------------
     since = price_as_of - timedelta(days=int(PU["lookback_days"]))
     buys = tx[(tx["bioguide"].isin(qualified["bioguide"])) & (tx["type"] == "P") & (tx["asset_type"] == "ST")
@@ -203,6 +213,11 @@ def run(cfg: Settings | None = None, price_provider=None, house=None, congress=N
         cand = pdf[pdf["score"].notna()]
         for tk, g in cand.groupby("ticker"):
             best = g.sort_values("score", ascending=False).iloc[0]
+            if tk in bl_map:
+                rejects.append({"ticker": tk, "reason": bl_reason({**bl_map[tk], "until": str(bl_map[tk]["until"]),
+                                                                    "trade_date": str(bl_map[tk]["trade_date"]),
+                                                                    "filing_date": str(bl_map[tk]["filing_date"])})})
+                continue
             if PU["require_overlap"] and best["link"] not in ("direct", "sector"):
                 rejects.append({"ticker": tk, "reason": "no committee overlap (NONE)"})
                 continue
@@ -224,8 +239,29 @@ def run(cfg: Settings | None = None, price_provider=None, house=None, congress=N
     pdf[pcols].to_csv(out / f"{stem}-purchases.csv", index=False) if len(pdf) else None
     _write_report(mp, signals, screen, pdf, rejects, coverage, unmatched, ref_notes, price_as_of, years, cfg, edgar,
                   amended_dupes)
+    _append_blacklist(mp, blacklist, B)
     return {"signals": signals, "screen": screen, "purchases": pdf, "rejects": rejects, "coverage": coverage,
+            "blacklist": blacklist,
             "unmatched": unmatched, "ref_notes": ref_notes, "price_as_of": price_as_of, "paths": {"json": jp, "md": mp}}
+
+
+def _append_blacklist(md_path, bl: pd.DataFrame, B: dict) -> None:
+    """Add the sell-blacklist section to the political report."""
+    L = ["", "## Sell blacklist", "",
+         f"_A sale by a qualifying member whose reported range starts above ${float(B.get('min_amount_low_usd', 15001)) - 1:,.0f} "
+         f"and is at least {float(B.get('min_fraction', 0.75)):.0%} of their position (full sale, or estimated from their "
+         f"own disclosed trades) blocks the stock from the daily list for {B.get('days', 90)} days._", ""]
+    if not B.get("enabled", True):
+        L.append("Disabled in settings.")
+    elif bl.empty:
+        L.append("No stock is blacklisted right now.")
+    else:
+        L += ["| Ticker | Member | Sold | Amount | Share of position | Blocked until | Filing |", "|---|---|---|---|---|---|---|"]
+        for r in bl.itertuples():
+            share = "100% (full sale)" if r.full_sale else f"~{r.sale_fraction:.0%} (est.)"
+            L.append(f"| {r.ticker} | {r.member} | {r.trade_date} | {r.amount} | {share} | {r.until} | [PTR]({r.source_url}) |")
+    with open(md_path, "a", encoding="utf-8") as fh:
+        fh.write("\n".join(L) + "\n")
 
 
 def _build_signal(best: pd.Series, group: pd.DataFrame, cfg: Settings, price_as_of: date, congress
@@ -270,7 +306,8 @@ def _build_signal(best: pd.Series, group: pd.DataFrame, cfg: Settings, price_as_
                 Source(url=f"https://finance.yahoo.com/quote/{best['ticker']}/history", as_of=price_as_of, note="prices")]
     if link == "direct":
         sources.append(Source(url="https://www.usaspending.gov/search", as_of=date.today(), note="federal contracts"))
-    metrics = {"setup": "political_purchase", "price_as_of": price_as_of.isoformat(), "entry_mode": "next_open",
+    metrics = {"setup": "political_purchase", "price_as_of": price_as_of.isoformat(),
+               "entry_mode": PL.get("entry_mode", "next_open"), "entry_window_days": int(PL.get("entry_window_days", 1)),
                "link": link, "member": best["member"], "bioguide": best["bioguide"], "buyers": ", ".join(buyers),
                "trade_date": str(best["trade_date"]), "filing_date": str(best["filing_date"]),
                "amount": best["amount"], "filing_delay_days": int(best["filing_delay_days"]),

@@ -26,7 +26,8 @@ Thresholds: `config/settings.yaml` under `regime:` and `orchestrator:`.
    - Scanner status table: report any scanner that FAILED or produced no fresh output, with its log
      (`data/logs/<skill>.log`).
    - Top 10 ideas (5 in quick mode): thesis, plan, size, key dates, conflicts, flags, sources.
-   - A section per skill and the rejected list with reasons.
+   - A section per skill and the rejected list with reasons. Ideas blocked by the political **sell blacklist**
+     show as `blacklisted until <date>: <member> sold ...`; mention them.
 3. Present the top ideas in order. For each, state which skills flagged it (confluence), any CONFLICT, the size
    (shares, $ and % risk), and that sizes are paper sizes. Call out momentum-hype ideas as HIGH RISK.
 4. Mention how many ideas were logged to the journal and suggest `review-performance` weekly.

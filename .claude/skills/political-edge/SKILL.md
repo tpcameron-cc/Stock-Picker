@@ -30,7 +30,10 @@ Thresholds: `config/settings.yaml` under `political:`; committee map: `config/co
      paper PTRs are not read; former members (not in the current-members file) are excluded;
    - links use a curated committee map and name-matched USAspending recipients — label them as such;
    - lobbying, FEC money, testimony, bills/hearings, Trump-related overlays and "leaving office" are not covered yet.
-5. Hand Signals to `risk-and-sizing`.
+5. Report the **Sell blacklist** section: stocks a qualifying member sold big (range above $15k and >= 75% of
+   their estimated position) are blocked from the daily list for 90 days. Say positions are estimates.
+6. Political ideas hold up to 126 sessions and use a limit entry that waits up to 10 sessions for the zone.
+7. Hand Signals to `risk-and-sizing`.
 
 ## Output
 - `reports/political-YYYY-MM-DD.json`: `Signal`s (skill = `political-edge`) with `metrics`: link (direct|sector), member,

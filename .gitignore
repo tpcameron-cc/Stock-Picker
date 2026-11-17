@@ -16,3 +16,4 @@ data/*.sqlite
 data/attention/
 data/logs/
 data/exports/
+data/political_blacklist.json

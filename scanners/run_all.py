@@ -140,7 +140,12 @@ def conflict_context(cfg: Settings, day: date, tickers: set[str], edgar) -> dict
                 sells[t] = len(edgar.insider_transactions(t, "S", 30, day))
             except Exception:
                 pass
-    return {"earnings": earnings, "estimates_falling": falling, "insider_sells": sells}
+    blacklist, bl_asof = {}, None
+    if cfg.get("political.blacklist.enabled", True):
+        from scanners.political.blacklist import load_blacklist
+        blacklist, bl_asof = load_blacklist(cfg.path_for("political.blacklist.file"), day)
+    return {"earnings": earnings, "estimates_falling": falling, "insider_sells": sells, "blacklist": blacklist,
+            "blacklist_as_of": bl_asof}
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +186,11 @@ def merge_ideas(sigs: dict[str, list[Signal]], ctx: dict, regime: Regime, cfg: S
             elif ctx["insider_sells"].get(t, 0) > 0:
                 idea.conflicts.append(f"hype with insider selling: {ctx['insider_sells'][t]} Form 4 sales in 30 days")
         idea.score = min(100.0, idea.score - float(o["conflict_penalty"]) * len(idea.conflicts))
-        if idea.score < threshold:
+        bl = (ctx.get("blacklist") or {}).get(t)
+        if bl:
+            from scanners.political.blacklist import reason as bl_reason
+            idea.rejected = bl_reason(bl)
+        elif idea.score < threshold:
             idea.rejected = f"score {idea.score:.1f} < {threshold:g} (min {o['min_score']} + regime {regime.min_score_add:g})"
         ideas.append(idea)
     return sorted(ideas, key=lambda i: i.score, reverse=True)
@@ -302,6 +311,8 @@ def write_report(cfg, today, regime: Regime, ideas: list[Idea], sigs, status, ru
          f"> **{regime.headline()}**", ""]
     L += [f"- {k}: {v if v is None else round(v, 3)}" for k, v in regime.detail.items()]
     L += [f"- note: {n}" for n in regime.notes]
+    bl_n = sum(1 for i in ideas if i.rejected and i.rejected.startswith("blacklisted"))
+    L.append(f"- political sell blacklist: {bl_n} idea(s) blocked today (list from political-edge, see its report)")
     L += ["", "## Scanners", "", "| Skill | Status | Ideas | Runtime | Report |", "|---|---|---|---|---|"]
     for sk in sigs:
         rt = f"{runs[sk]['seconds']}s" if sk in runs else "—"

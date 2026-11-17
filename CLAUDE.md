@@ -38,7 +38,7 @@ cite every number, and say plainly when data is missing or a skill is underperfo
 | `config/committee_jurisdiction.yaml` | **Curated** committee → agencies / sectors / industries map (House Rule X, Senate Rule XXV). Editable; reports label links built from it. |
 | `config/local.yaml` | **Gitignored** personal overrides (account size). Merged over `settings.yaml` by `settings()`. |
 | `core/fundamentals.py` | Shared fundamental checks: YoY growth, deceleration, estimate revisions, earnings proximity. Missing data = `passed=None`, never a guess. |
-| `scanners/<skill>/` | Python behind each skill (importable, tested). `scanners/breakout/`: `setups.py` (causal features, gates, plans, score), `scan.py`, `backtest.py`, `experiments.py` (exit/entry variants, read-only). `scanners/catalyst/`: `history.py` (past earnings reactions), `plays.py` (scores, plays, plans, drift, lockups), `scan.py`. `scanners/political/`: `screen.py` (Step A copy-trade screen), `oversight.py` (committee links), `score.py`, `scan.py`. `scanners/hype/`: `logic.py` (confirmation, late-stage, attention score, pump flags, plan), `scan.py`. |
+| `scanners/<skill>/` | Python behind each skill (importable, tested). `scanners/breakout/`: `setups.py` (causal features, gates, plans, score), `scan.py`, `backtest.py`, `experiments.py` (exit/entry variants, read-only). `scanners/catalyst/`: `history.py` (past earnings reactions), `plays.py` (scores, plays, plans, drift, lockups), `scan.py`. `scanners/political/`: `screen.py` (Step A copy-trade screen), `oversight.py` (committee links), `score.py`, `blacklist.py` (sell blacklist), `scan.py`. `scanners/hype/`: `logic.py` (confirmation, late-stage, attention score, pump flags, plan), `scan.py`. |
 | `core/providers/` | One module per data source, each with disk cache (`DiskCache`) + rate limiting (`RateLimiter`). `earnings_calendar.py` = Nasdaq earnings calendar; yfinance provider also has `earnings_history`, `implied_move`, `estimates`, `profile`. `house_disclosures.py` = House PTR index + PDF parser; `senate_disclosures.py` = Senate eFD PTRs (accepts the agreement); `congress.py` = members/committees; `usaspending.py` = federal contracts; `edgar.py` also parses Form 4 open-market buys. `attention.py` = ApeWisdom / Tradestie / StockTwits / Google News RSS + daily snapshot store; yfinance provider has `squeeze_context`, `call_activity`. |
 | `.claude/skills/` | One `SKILL.md` per skill; each calls into `scanners/` and `core/`. |
 | `data/cache/` | Provider cache (gitignored). Delete a subfolder to force a refetch. |
@@ -188,3 +188,14 @@ uv run python -m core.review                            # weekly review (suggest
   (Yahoo publishes bars unevenly in the evening) and flags lagging data; no self-correlation; ideas already TAKEN in
   the journal are shown as held with their original size and still count against limits. The first, buggy batch
   (31 rows, run 20261117T013246Z) was deleted from the journal with the user's approval and re-logged correctly.
+- User rules added 2026-11-17:
+  - **Sell blacklist** (`political.blacklist`): a sale by a QUALIFYING member whose range starts above $15,000 and
+    is >= 75% of their position blocks that stock from the daily list (every skill) for 90 days from the trade
+    date. Positions are estimated from the member's own disclosed trades (range midpoints); a reported full sale
+    = 100%; a partial sale with no estimable position doesn't trigger. political-edge writes
+    `data/political_blacklist.json` (gitignored); run-all-scans applies it, so an `--only` run without
+    political-edge uses the last saved list. First run: empty (all 25 qualifying-member sales were $1k–$15k).
+  - **Political-edge timing** (`political.plan`): 126-trading-day horizon and a `limit` entry working for 10
+    sessions (`entry_window_days`, read per idea by the journal). Positions logged before this change keep their
+    original terms (e.g. AT&T: next-open entry, 60 days).
+
