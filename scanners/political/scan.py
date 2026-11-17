@@ -26,7 +26,7 @@ from scanners.political.blacklist import build_blacklist, reason as bl_reason, s
 from scanners.political.oversight import classify, load_jurisdiction, member_oversight
 from scanners.political.score import score_purchase
 from scanners.political.screen import (
-    amount_mid, apply_criteria, dedupe_cross_filing, member_stats, price_on_or_after,
+    amount_mid, apply_criteria, dedupe_cross_filing, member_performance_points, member_stats, price_on_or_after,
 )
 
 log = logging.getLogger(__name__)
@@ -47,6 +47,37 @@ def _s(x) -> str:
 
 def _r(x, nd=4):
     return None if x is None or (isinstance(x, float) and np.isnan(x)) else round(float(x), nd)
+
+
+def ingest(cfg: Settings, years: list[int], house, congress, senate=None
+           ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str], int]:
+    """House + Senate PTR transactions for `years`, matched to current members (bioguide) and de-duplicated.
+    Returns (tx, coverage, members, unmatched_filers, amended_dupes_removed)."""
+    tx, coverage = house.transactions(years, progress=True)
+    tx["chamber"], coverage["chamber"] = "house", "house"
+    members = congress.members()
+    keys = tx[["last", "state_district"]].drop_duplicates()
+    bmap = {(r.last, r.state_district): match_member(members, r.last, r.state_district) for r in keys.itertuples()}
+    tx["bioguide"] = [bmap.get((a, b)) for a, b in zip(tx["last"], tx["state_district"])]
+    unmatched = sorted({f"{a} ({b})" for (a, b), v in bmap.items() if v is None})
+
+    if bool(cfg.get("political.senate.enabled", True)):
+        from core.providers.senate_disclosures import SenateDisclosureProvider
+        senate = senate or SenateDisclosureProvider(cfg)
+        stx, scov = senate.transactions(date(min(years), 1, 1), progress=True)
+        scov["chamber"] = "senate"
+        if len(stx):
+            names_ = stx[["first", "last"]].drop_duplicates()
+            smap = {(r.first, r.last): match_senator(members, r.first, r.last) for r in names_.itertuples()}
+            stx["bioguide"] = [smap.get((a, b)) for a, b in zip(stx["first"], stx["last"])]
+            unmatched += sorted({f"Sen. {a} {b}" for (a, b), v in smap.items() if v is None})
+            seat = members.set_index("bioguide")["state_district"]
+            stx["state_district"] = stx["bioguide"].map(seat)
+            tx = pd.concat([tx, stx], ignore_index=True)
+        coverage = pd.concat([coverage, scov], ignore_index=True)
+    tx = tx[tx["trade_date"].notna() & tx["type"].isin(["P", "S", "E"])]
+    tx, amended_dupes = dedupe_cross_filing(tx)
+    return tx, coverage, members, unmatched, amended_dupes
 
 
 def run(cfg: Settings | None = None, price_provider=None, house=None, congress=None, contracts_provider=None,
@@ -70,33 +101,9 @@ def run(cfg: Settings | None = None, price_provider=None, house=None, congress=N
 
     # ---- ingest -------------------------------------------------------------------------------------------
     years = [today.year - k for k in range(int(P["years_back"]))]
-    tx, coverage = house.transactions(years, progress=True)
-    tx["chamber"], coverage["chamber"] = "house", "house"
-    members = congress.members()
+    tx, coverage, members, unmatched, amended_dupes = ingest(cfg, years, house, congress, senate)
     assignments = congress.committee_assignments()
     juris = load_jurisdiction(cfg.path_for("political.jurisdiction_file"))
-    keys = tx[["last", "state_district"]].drop_duplicates()
-    bmap = {(r.last, r.state_district): match_member(members, r.last, r.state_district) for r in keys.itertuples()}
-    tx["bioguide"] = [bmap.get((a, b)) for a, b in zip(tx["last"], tx["state_district"])]
-    unmatched = sorted({f"{a} ({b})" for (a, b), v in bmap.items() if v is None})
-
-    senate_on = bool(cfg.get("political.senate.enabled", True))
-    if senate_on:
-        from core.providers.senate_disclosures import SenateDisclosureProvider
-        senate = senate or SenateDisclosureProvider(cfg)
-        stx, scov = senate.transactions(date(min(years), 1, 1), progress=True)
-        scov["chamber"] = "senate"
-        if len(stx):
-            names_ = stx[["first", "last"]].drop_duplicates()
-            smap = {(r.first, r.last): match_senator(members, r.first, r.last) for r in names_.itertuples()}
-            stx["bioguide"] = [smap.get((a, b)) for a, b in zip(stx["first"], stx["last"])]
-            unmatched += sorted({f"Sen. {a} {b}" for (a, b), v in smap.items() if v is None})
-            seat = members.set_index("bioguide")["state_district"]
-            stx["state_district"] = stx["bioguide"].map(seat)
-            tx = pd.concat([tx, stx], ignore_index=True)
-        coverage = pd.concat([coverage, scov], ignore_index=True)
-    tx = tx[tx["trade_date"].notna() & tx["type"].isin(["P", "S", "E"])]
-    tx, amended_dupes = dedupe_cross_filing(tx)
 
     long_window = int(P["years_back"]) >= 4
     period = "5y" if long_window else "2y"
@@ -111,15 +118,19 @@ def run(cfg: Settings | None = None, price_provider=None, house=None, congress=N
 
     # ---- Step A: screen members ---------------------------------------------------------------------------
     names = members.set_index("bioguide")
+    mode = S.get("performance_mode", "gate")
     rows = []
     for bg, g in tx[tx["bioguide"].notna()].groupby("bioguide"):
         st = member_stats(g, closes, spy, price_as_of, S, long_window)
         if st["n_trades"] == 0:
             continue
-        ok, fails, flags, exception = apply_criteria(st, S)
+        ok, fails, flags, exception = apply_criteria(st, S, mode)
+        pts, shrunk = member_performance_points(st, SC) if mode == "score" else (0.0, np.nan)
         m = names.loc[bg]
         rows.append({"bioguide": bg, "member": m["full_name"], "party": m["party"], "seat": m["state_district"],
-                     "qualified": ok, "exception": exception, "fail_reasons": "; ".join(fails),
+                     "qualified": ok, "qualified_beat_spy": apply_criteria(st, S, "gate")[0],
+                     "perf_points": round(pts, 1), "excess_shrunk": shrunk,
+                     "exception": exception, "fail_reasons": "; ".join(fails),
                      "flags": "; ".join(flags), **{k: v for k, v in st.items()}})
     screen = pd.DataFrame(rows).sort_values(["qualified", "excess_1y"], ascending=[False, False])
     qualified = screen[screen["qualified"]]
@@ -142,7 +153,7 @@ def run(cfg: Settings | None = None, price_provider=None, house=None, congress=N
     B = P.get("blacklist", {}) or {}
     blacklist = pd.DataFrame()
     if B.get("enabled", True):
-        who = set(qualified["bioguide"]) if B.get("members", "qualified") == "qualified" else set(tx["bioguide"].dropna())
+        who = blacklist_members(screen, tx, B.get("members", "qualified_beat_spy"))
         blacklist = build_blacklist(tx, who, price_as_of, B, names["full_name"].to_dict())
         save_blacklist(blacklist, cfg.path_for("political.blacklist.file"), price_as_of)
     bl_map = {r["ticker"]: r for r in blacklist.to_dict("records")} if len(blacklist) else {}
@@ -189,10 +200,10 @@ def run(cfg: Settings | None = None, price_provider=None, house=None, congress=N
         move = close / px_disc - 1 if px_disc and close else None
         delay = (r.filing_date - r.trade_date).days if r.filing_date else 0
         mid = amount_mid(r.amount_low, r.amount_high) or 0
+        mrow = qualified.set_index("bioguide").loc[r.bioguide]
         score, parts = score_purchase(cl["link"], others, mid, (price_as_of - r.trade_date).days, delay, move,
                                       insider is not None and len(insider) > 0, SC, int(PU["lookback_days"]),
-                                      int(S["max_median_filing_delay"]))
-        mrow = qualified.set_index("bioguide").loc[r.bioguide]
+                                      int(S["max_median_filing_delay"]), float(mrow["perf_points"]))
         purchases.append({
             "ticker": r.ticker, "company": company, "member": mrow["member"], "party": mrow["party"],
             "seat": mrow["seat"], "trade_date": r.trade_date, "filing_date": r.filing_date, "owner": r.owner,
@@ -205,6 +216,7 @@ def run(cfg: Settings | None = None, price_provider=None, house=None, congress=N
             "filing_delay_days": delay, "score": round(score, 1), "sector": prof.get("sector"),
             "industry": prof.get("industry"), "committees": "; ".join(ov.committees), "leadership": "; ".join(ov.leadership),
             "member_flags": mrow["flags"], "member_exception": mrow["exception"], "source_url": r.source_url,
+            "member_excess_delay": _r(mrow["excess_1y_delay"]), "member_perf_points": mrow["perf_points"],
             "bioguide": r.bioguide, "_parts": parts, "_df": df, "_mid": mid})
 
     # One idea per ticker: the strongest purchase, with every qualifying buyer listed.
@@ -245,10 +257,29 @@ def run(cfg: Settings | None = None, price_provider=None, house=None, congress=N
             "unmatched": unmatched, "ref_notes": ref_notes, "price_as_of": price_as_of, "paths": {"json": jp, "md": mp}}
 
 
+BLACKLIST_MEMBERS = {
+    "qualified_beat_spy": "members who pass the screen AND beat SPY (the rule as set 2026-11-17)",
+    "qualified": "members who pass the screen in its current performance_mode",
+    "all": "every member with disclosed trades",
+}
+
+
+def blacklist_members(screen: pd.DataFrame, tx: pd.DataFrame, rule: str) -> set[str]:
+    """Whose big sales count for the sell blacklist. Kept separate from the screen's performance_mode so switching
+    the screen to score mode doesn't silently widen the blacklist."""
+    if rule == "qualified_beat_spy":
+        return set(screen.loc[screen["qualified_beat_spy"], "bioguide"])
+    if rule == "qualified":
+        return set(screen.loc[screen["qualified"], "bioguide"])
+    if rule == "all":
+        return set(tx["bioguide"].dropna())
+    raise ValueError(f"political.blacklist.members must be one of {sorted(BLACKLIST_MEMBERS)}, got {rule!r}")
+
+
 def _append_blacklist(md_path, bl: pd.DataFrame, B: dict) -> None:
     """Add the sell-blacklist section to the political report."""
     L = ["", "## Sell blacklist", "",
-         f"_A sale by a qualifying member whose reported range starts above ${float(B.get('min_amount_low_usd', 15001)) - 1:,.0f} "
+         f"_Counts sales by {BLACKLIST_MEMBERS.get(B.get('members', 'qualified_beat_spy'), '?')}. A sale whose reported range starts above ${float(B.get('min_amount_low_usd', 15001)) - 1:,.0f} "
          f"and is at least {float(B.get('min_fraction', 0.75)):.0%} of their position (full sale, or estimated from their "
          f"own disclosed trades) blocks the stock from the daily list for {B.get('days', 90)} days._", ""]
     if not B.get("enabled", True):
@@ -287,7 +318,12 @@ def _build_signal(best: pd.Series, group: pd.DataFrame, cfg: Settings, price_as_
               f"(filed {best['filing_date']}); {link.upper()} committee link: {best['evidence']}.")
     if len(buyers) > 1:
         thesis += f" Other qualifying buyers: {', '.join(b for b in buyers if b != best['member'])}."
-    thesis += " Member qualified on copy-trade performance vs SPY (House PTRs)."
+    if cfg.get("political.screen.performance_mode", "gate") == "gate":
+        thesis += " Member qualified on copy-trade performance vs SPY (disclosed PTR trades)."
+    else:
+        ex = best["member_excess_delay"]
+        thesis += (" Member passed the screen; past copy-trade performance is scored, not required "
+                   f"({'n/a' if ex is None else f'{ex:+.1%}'} vs SPY delay-adjusted, {best['member_perf_points']:+.1f} pts).")
     exception, mflags, gaps = _s(best["member_exception"]), _s(best["member_flags"]), _s(best["gaps"])
     flags = [f for f in [_s(best["timing"]), _s(best["link_flags"]), mflags, exception, gaps] if f]
     flags.append("disclosure signal: public PTR data, possibly weeks old")
@@ -340,7 +376,9 @@ def _write_report(md_path, signals, screen, pdf, rejects, coverage, unmatched, r
          cov_line(coverage[coverage["chamber"] == "house"], f"House PTRs {', '.join(map(str, years))}"),
          cov_line(coverage[coverage["chamber"] == "senate"], f"Senate PTRs filed since {min(years)}-01-01 (eFD)"),
          f"- Amended-report repeats removed (same transaction in a later filing): {amended_dupes}",
-         f"- Members with trades: {len(screen)}; qualified: **{int(screen['qualified'].sum())}**; "
+         f"- Members with trades: {len(screen)}; qualified: **{int(screen['qualified'].sum())}** "
+         f"(performance_mode `{S.get('performance_mode', 'gate')}`; the beat-SPY gate would keep "
+         f"{int(screen['qualified_beat_spy'].sum())}); "
          f"filers not in the current-members file (usually former members; excluded): {', '.join(unmatched) or 'none'}",
          f"- Ideas: **{len(signals)}**; purchases classified: {len(pdf)}; rejected names: {len(rejects)}",
          "- Performance is copy-trade: buys at amount-range midpoints, priced at the trade date (or filing date for "
@@ -349,12 +387,20 @@ def _write_report(md_path, signals, screen, pdf, rejects, coverage, unmatched, r
     L += ["## Ideas", "", body]
     q = screen[screen["qualified"]]
     L += ["## Step A — qualifying members", "",
-          "| Member | Party | Seat | Trades | 1Y copy-trade | vs SPY | Delay-adj. vs SPY | Ex-best vs SPY | Med. delay | Est. book | Flags / exception |",
-          "|---|---|---|---|---|---|---|---|---|---|---|"]
-    for r in q.itertuples():
-        L.append(f"| {r.member} | {r.party} | {r.seat} | {r.n_trades} | {r.ret_1y:+.1%} | {r.excess_1y:+.1%} | "
-                 f"{r.excess_1y_delay:+.1%} | {r.excess_ex_best:+.1%} | {r.median_filing_delay:.0f}d | "
+          "| Member | Party | Seat | Trades | 1Y copy-trade | vs SPY | Delay-adj. vs SPY | Ex-best vs SPY | Perf. pts | Med. delay | Est. book | Flags / exception |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    pct = lambda x: "—" if pd.isna(x) else f"{x:+.1%}"
+    for r in q.sort_values("perf_points", ascending=False).itertuples():
+        L.append(f"| {r.member} | {r.party} | {r.seat} | {r.n_trades} | {pct(r.ret_1y)} | {pct(r.excess_1y)} | "
+                 f"{pct(r.excess_1y_delay)} | {pct(r.excess_ex_best)} | {r.perf_points:+.1f} | "
+                 f"{r.median_filing_delay:.0f}d | "
                  f"${r.est_portfolio:,.0f} | {'; '.join(x for x in [_s(r.flags), _s(r.exception)] if x) or '—'} |")
+    if S.get("performance_mode", "gate") == "score":
+        mx = float(cfg.get("political.scoring.member_performance_max"))
+        weight = (f"up to ±{mx:g}, scaled on the delay-adjusted excess vs SPY and shrunk toward 0 for members with "
+                  "few buys" if mx else "0: weight set to 0 because past performance did not persist (2026-11-16)")
+        L += ["", f"_Score mode: beating SPY is not required. Perf. pts = {weight}. "
+                  "`uv run python -m scanners.political.persistence` tests whether past performance predicts anything._"]
     near = screen[~screen["qualified"] & (screen["n_trades"] >= int(S["min_trades"]))].head(15)
     if len(near):
         L += ["", "Active traders that did not qualify (top 15):", "", "| Member | Trades | vs SPY | Why not |", "|---|---|---|---|"]

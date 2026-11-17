@@ -40,7 +40,9 @@ def test_confluence_bonus_and_primary(cfg):
     a = next(i for i in ideas if i.ticker == "AAA")
     assert a.primary.skill == "political-edge" and a.score == 80 and set(a.skills) == {"political-edge", "breakout-scanner"}
     m = merged_signal(a)
-    assert m.score == 80 and "Also breakout-scanner: breakout-scanner thesis." in m.thesis
+    # priority (common scale): political 70 = 50th pct of its [40, 100] range with no history, +10 confluence
+    assert a.priority == pytest.approx(60) and m.score == pytest.approx(60) and m.metrics["merged_raw_score"] == 80
+    assert "Also breakout-scanner: breakout-scanner thesis." in m.thesis
     assert set(m.signals_hit) == {"political-edge_hit", "breakout-scanner_hit"} and m.metrics["skills"]
     assert ideas[0].ticker == "AAA"
 

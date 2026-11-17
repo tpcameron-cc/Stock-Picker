@@ -88,6 +88,10 @@ political:
   jurisdiction_file: config/committee_jurisdiction.yaml
 
   screen:                        # Step A: which members' trades to follow
+    # gate  = member must beat SPY (copy-trade, 1Y) and not only via one stock (the screen until 2026-11-16).
+    # score = beating SPY is not required; past performance becomes a score component (scoring.member_performance_*).
+    # All other screen criteria (trades, filing delay, reliability, portfolio size) apply in both modes.
+    performance_mode: score
     window_days: 365             # main performance window (1Y)
     window_days_long: 1095       # 3Y, shown only if enough filing years are ingested
     reliability_max_gap_pp: 5    # |copy-trade return - delay-adjusted return| <= 5 percentage points
@@ -123,6 +127,12 @@ political:
     late_filing_penalty: 10      # this trade filed > max_median_filing_delay days after the trade
     move_penalty_start: 0.15     # price already up > 15% since disclosure -> penalty...
     move_penalty_max: 15         # ...scaling to -15 at +30%
+    # Score mode only: the member's DELAY-ADJUSTED 1Y excess vs SPY, shrunk for small samples
+    # (excess * n_buys / (n_buys + shrink_buys)), scaled to +-max points at +-full. Trailing SPY costs points.
+    # 0 (user, 2026-11-16): the persistence walk-forward found no predictive value (rank corr -0.08 [-0.21, +0.05]).
+    member_performance_max: 0
+    member_performance_full: 0.10      # shrunk excess of +-10pp = full points
+    member_performance_shrink_buys: 20 # a member with 20 buys keeps half their excess; 60 buys keep 75%
     min_score: 40
 
   plan:
@@ -138,12 +148,24 @@ political:
   blacklist:
     enabled: true
     days: 90                     # blocked for 90 calendar days from the sale's trade date
-    members: qualified           # only members who pass the Step A screen
+    # Whose sales count: qualified_beat_spy = pass the screen AND beat SPY (the rule as set 2026-11-17, kept when
+    # the screen moved to score mode) | qualified = pass the screen in its current mode | all = every member.
+    members: qualified_beat_spy
     min_amount_low_usd: 15001    # the reported sale range must start above $15,000
     min_fraction: 0.75           # and the sale is >= 75% of their position: a FULL sale, or a partial sale whose
                                  # amount is >= 75% of the position estimated from their own disclosed trades
                                  # (range midpoints). Unknown position (bought before the data) -> no trigger.
     file: data/political_blacklist.json   # latest list, read by run-all-scans (gitignored with data/)
+
+  # Walk-forward test: does a member's past copy-trade performance predict their NEXT purchases?
+  #   uv run python -m scanners.political.persistence     (read-only; never changes settings)
+  persistence:
+    years: 4                     # PTR filing years to load (needs >= 2; each formation date needs 1Y of history)
+    step_days: 91                # a new formation date every quarter; purchases FILED in the next quarter are followed
+    horizon_days: 126            # sessions each followed purchase is held (= plan.horizon_days)
+    bootstrap_samples: 5000      # cluster bootstrap: members are resampled, all their purchases together
+    ci_level: 0.90
+    min_members: 5               # fewer members on either side of a comparison -> "too few to judge"
 
 # ---------------------------------------------------------------------------
 # Skill 3: momentum-hype (attention accelerating AND price confirming; high risk by definition)
@@ -230,6 +252,16 @@ orchestrator:
   quick_top_n: 5
   quick_limit: 1500              # --quick: breakout / catalyst scan only the first N listed stocks, cached data
   timeout_minutes: 60            # per scanner process
+  # Skills score on different point systems, so ideas are RANKED on a common scale (core/calibrate.py):
+  # percentile of the score within its own skill's past journal scores + the skill's realized expectancy.
+  # min_score above still gates on the primary skill's own scale; confluence / conflict points apply to both.
+  calibration:
+    enabled: true                # false = rank by raw scores (the behaviour before 2026-11-16)
+    lookback_days: 365           # past journal scores per skill used as the percentile reference
+    prior_weight: 20             # pseudo-scores spread uniformly over [skill min_score, 100]: history takes over as it grows
+    edge_shrink_trades: 30       # skill expectancy shrunk by n / (n + 30) closed ideas (= review.min_closed_trades)
+    edge_points_per_r: 25        # +0.2R shrunk expectancy = +5 priority points...
+    edge_max_points: 15          # ...capped at +-15
 
 review:
   min_closed_trades: 30          # fewer closed trades per skill -> "too early to judge"

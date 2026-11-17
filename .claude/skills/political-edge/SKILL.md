@@ -1,6 +1,6 @@
 ---
 name: political-edge
-description: Find stocks recently bought by members of Congress whose disclosed trades beat the S&P 500, where the member's committees oversee the company (federal contracts from agencies under their committees = direct link; industry under committee jurisdiction = sector link). Built on House Periodic Transaction Reports parsed from the Clerk's PDFs and Senate PTRs from the eFD site. Use when the user asks about congressional trading, politician stock picks, committee conflicts, or "what is Congress buying". Research only, public data only, never places orders.
+description: Find stocks recently bought by members of Congress who pass a trading screen (past performance vs the S&P 500 is scored, or required in gate mode), where the member's committees oversee the company (federal contracts from agencies under their committees = direct link; industry under committee jurisdiction = sector link). Built on House Periodic Transaction Reports parsed from the Clerk's PDFs and Senate PTRs from the eFD site. Use when the user asks about congressional trading, politician stock picks, committee conflicts, "what is Congress buying", or whether members' outperformance persists. Research only, public data only, never places orders.
 ---
 
 # political-edge
@@ -34,6 +34,21 @@ Thresholds: `config/settings.yaml` under `political:`; committee map: `config/co
    their estimated position) are blocked from the daily list for 90 days. Say positions are estimates.
 6. Political ideas hold up to 126 sessions and use a limit entry that waits up to 10 sessions for the zone.
 7. Hand Signals to `risk-and-sizing`.
+8. Say which `political.screen.performance_mode` is on. `score` (default since 2026-11-16): beating SPY is not
+   required; the member's delay-adjusted excess vs SPY, shrunk for few buys, adds or subtracts up to
+   `scoring.member_performance_max` points. `gate`: the member must beat SPY (the original screen). The report
+   shows how many members the gate would have kept. The sell blacklist has its own member rule
+   (`blacklist.members`, default `qualified_beat_spy`), so switching modes does not widen it.
+
+## Does past performance persist? (walk-forward, read-only)
+```bash
+uv run python -m scanners.political.persistence            # political.persistence.years (default 4 filing years)
+```
+Quarterly formation dates; members screened on trades filed by each date; their next quarter's filed purchases
+followed 126 sessions from the session after filing, vs SPY. Report `reports/political-persistence-YYYY-MM-DD.md`:
+(A) beat vs trailed, (B) same on delay-adjusted excess, (C) kept vs dropped by the gate, rank correlation, and a
+by-quarter table. CIs are member-cluster bootstraps. Report the verdicts and their CIs as they are; a CI spanning
+zero means "not detectable with this data". Never change `performance_mode` or weights without the user's approval.
 
 ## Output
 - `reports/political-YYYY-MM-DD.json`: `Signal`s (skill = `political-edge`) with `metrics`: link (direct|sector), member,

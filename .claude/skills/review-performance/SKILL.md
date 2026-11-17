@@ -22,6 +22,8 @@ Thresholds: `config/settings.yaml` under `review:`.
      trades, win rate, avg win / loss, expectancy in R and %, its 90% confidence interval, and return vs SPY;
    - per signal type and per setup;
    - whether risk-and-sizing helped (taken vs rejected-but-tracked ideas);
+   - **does the score rank ideas within each skill?** (rank correlation of score vs R, top vs bottom half). The daily
+     ranking uses each skill's score percentile, so a skill whose higher scores do WORSE is being mis-ranked: say so;
    - open and pending paper trades.
 3. Be plain: fewer than 30 closed trades per skill means "too early"; a positive average whose interval spans zero
    is noise, not edge. Don't round a weak result up.

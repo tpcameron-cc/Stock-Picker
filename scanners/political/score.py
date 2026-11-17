@@ -8,8 +8,11 @@ import math
 
 def score_purchase(link: str, other_buyers: int, amount_mid: float, days_since_trade: int,
                    filing_delay_days: int, move_since_disclosure: float | None, insider_cluster: bool,
-                   sc: dict, lookback_days: int, max_filing_delay: int) -> tuple[float, dict]:
+                   sc: dict, lookback_days: int, max_filing_delay: int,
+                   member_performance: float = 0.0) -> tuple[float, dict]:
+    """`member_performance`: points from screen.member_performance_points (score mode; 0 in gate mode)."""
     parts = {
+        "member_performance": float(member_performance),
         "overlap": float(sc.get(link, 0)) if link in ("direct", "sector") else 0.0,
         "agreement": float(min(other_buyers * sc["agreement_per_member"], sc["agreement_max"])),
         "size": 0.0, "recency": 0.0,

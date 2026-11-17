@@ -31,6 +31,7 @@ cite every number, and say plainly when data is missing or a skill is underperfo
 | `core/indicators.py` | Pure technical indicators (SMA/EMA, ATR, Bollinger, RSI, $vol, RVOL, MA stack, RS, VCP). |
 | `core/simulate.py` | Shared trade simulator (entry fills, stops, targets, time stops, optional trailing exits). Used by the backtest AND the journal so both apply identical rules. |
 | `core/risk.py` | risk-and-sizing: fixed-% risk sizing, position cap, 2:1 min R:R, max positions, sector cap, correlation check. CLI sizes Signal JSON files and can log them. |
+| `core/calibrate.py` | Common score scale for ranking ideas across skills: percentile within the skill's own past journal scores (blended with its [min_score, 100] range while history is short) + shrunk realized skill expectancy. |
 | `core/regime.py` | Market regime: SPY trend, sector-ETF breadth, equal-weight vs SPY, VIX level/trend → strong / neutral / weak and the threshold raise + size cut it implies. |
 | `core/review.py` | review-performance: outcomes, per-skill verdicts with bootstrap CIs, signal/setup tables, taken-vs-rejected, suggestions (never applied). |
 | `scanners/run_all.py` | run-all-scans: regime → 4 scanners as parallel processes → merge by ticker (confluence, conflicts) → size → journal → `reports/YYYY-MM-DD.md/.csv`. |
@@ -181,6 +182,14 @@ uv run python -m core.review                            # weekly review (suggest
   equal-weight beating SPY) → thresholds +5, sizes 75%. Yahoo had not yet published SPY's 11/16 bar that evening;
   the report notes components with different latest bars.
 - review-performance needs ~30 closed paper trades per skill before any verdict; until then it says "too early".
+- **Cross-skill score calibration (2026-11-16):** raw skill scores aren't comparable (first journal runs: catalyst
+  median 79, breakout 61). run-all-scans now RANKS by a common priority (`core/calibrate.py`, `orchestrator.calibration`):
+  percentile within the skill's own past scores (journal, past runs only, taken or not) blended with a uniform prior
+  over [skill min_score, 100] at 20 pseudo-scores, + the skill's closed-idea expectancy shrunk n/(n+30) at 25 pts/R
+  (cap ±15), ± confluence / conflict points. Admission is unchanged (merged raw score vs orchestrator.min_score +
+  regime). The merged Signal's score = priority, so risk-and-sizing fills slots in that order; raw scores stay in the
+  journal and `metrics.raw_score`. Within-skill validity (do higher scores do better?) is checked by review-performance.
+  `calibration.enabled: false` restores raw ranking.
 
 - First full run-all-scans (2026-11-16, ~19 min cold, ~35 s per scanner cached): all four scanners ok; 30 tickers;
   book filled to the 8-position limit. Fixed on the live run: drift entries now need >= 1 session after the gap
@@ -195,6 +204,18 @@ uv run python -m core.review                            # weekly review (suggest
     = 100%; a partial sale with no estimable position doesn't trigger. political-edge writes
     `data/political_blacklist.json` (gitignored); run-all-scans applies it, so an `--only` run without
     political-edge uses the last saved list. First run: empty (all 25 qualifying-member sales were $1k–$15k).
+  - **Beat-SPY requirement dropped (2026-11-16, user's request):** `political.screen.performance_mode: score`.
+    Beating SPY is no longer required; the member's delay-adjusted excess, shrunk for few buys, can be worth up to
+    ±`scoring.member_performance_max` points, set to **0** by the user after the persistence test below (the
+    points are still shown in the report). `gate` restores the old screen. The blacklist keeps its own rule
+    (`blacklist.members: qualified_beat_spy`). First score-mode run: 11 members qualify (gate: 3), 10 ideas, 6 of them
+    from one member (Cisneros).
+  - **Persistence walk-forward** (`scanners/political/persistence.py`, report `reports/political-persistence-2026-11-16.md`):
+    filings 2023–2026, 12 quarterly formation dates, 2,935 completed purchases (126 sessions after filing). Past
+    outperformance did NOT predict members' next purchases: beat vs trailed +0.7% [90% CI -2.1, +4.4]; delay-adjusted
+    +0.1% [-2.3, +3.3]; gate kept vs dropped -1.7% [-6.2, +3.7] (7 vs 13 members); rank corr -0.08 [-0.21, +0.05].
+    By-quarter differences flip sign. Copied purchases as a whole trailed SPY by ~2% over 126 sessions. So the
+    member-performance points are unsupported by this data; the user set the weight to 0 (2026-11-16).
   - **Political-edge timing** (`political.plan`): 126-trading-day horizon and a `limit` entry working for 10
     sessions (`entry_window_days`, read per idea by the journal). Positions logged before this change keep their
     original terms (e.g. AT&T: next-open entry, 60 days).

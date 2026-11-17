@@ -77,7 +77,8 @@ def copy_trade(trades: pd.DataFrame, prices: dict[str, pd.Series], spy: pd.Serie
             if not (start <= r.trade_date <= end):
                 continue
             px, spx = price_on_or_after(close, r.eff), price_on_or_after(spy, r.eff)
-            if px is None or spx is None or pd.Timestamp(r.eff) > close.index[-1]:
+            # no bar by `end` (e.g. a stock that started trading later): can't mark it at `end` -> unpriced
+            if px is None or spx is None or pd.Timestamp(r.eff) > close.index[-1] or close.index[0] > pd.Timestamp(end):
                 unpriced += 1
                 continue
             lots[r.ticker].append({"shares": mid / px, "cost": mid, "spy_units": mid / spx, "mid": mid,
@@ -170,21 +171,29 @@ def member_stats(tx: pd.DataFrame, prices: dict[str, pd.Series], spy: pd.Series,
     return out
 
 
-def apply_criteria(st: dict, s: dict) -> tuple[bool, list[str], list[str], str | None]:
-    """Returns (qualified, fail_reasons, flags, exception_reason)."""
+def apply_criteria(st: dict, s: dict, mode: str | None = None) -> tuple[bool, list[str], list[str], str | None]:
+    """Returns (qualified, fail_reasons, flags, exception_reason).
+
+    mode (default `s["performance_mode"]`): "gate" = the member must beat SPY (copy-trade, 1Y) and not only because
+    of one stock (the screen before 2026-11-16); "score" = trailing SPY or one-stock outperformance are flags, and past
+    performance is a score component instead (`member_performance_points`). Every other criterion applies in both."""
+    mode = mode or s.get("performance_mode", "gate")
+    if mode not in ("gate", "score"):
+        raise ValueError(f"performance_mode must be 'gate' or 'score', got {mode!r}")
     fails, flags, exception = [], [], None
+    perf = fails if mode == "gate" else flags
     ex = st["excess_1y"]
     if pd.isna(ex):
         fails.append("no priced stock purchases in the window")
     elif ex <= 0:
-        fails.append(f"trails SPY by {-ex:.1%} (copy-trade, 1Y)")
+        perf.append(f"trails SPY by {-ex:.1%} (copy-trade, 1Y)")
     gap = st["reliability_gap_pp"]
     if pd.notna(gap) and gap > float(s["reliability_max_gap_pp"]):
         fails.append(f"unreliable: return differs {gap:.1f}pp from delay-adjusted (> {s['reliability_max_gap_pp']}pp)")
     if st["n_trades"] < int(s["min_trades"]):
         fails.append(f"{st['n_trades']} trades (< {s['min_trades']})")
     if pd.notna(ex) and ex > 0 and not (st["excess_ex_best"] > 0):
-        fails.append(f"beats SPY only because of {st['best_ticker']}")
+        perf.append(f"beats SPY only because of {st['best_ticker']}")
     if pd.notna(st["median_filing_delay"]) and st["median_filing_delay"] > float(s["max_median_filing_delay"]):
         fails.append(f"median filing delay {st['median_filing_delay']:.0f}d (> {s['max_median_filing_delay']})")
     if pd.notna(st["late_share"]) and st["late_share"] > float(s["max_late_share"]):
@@ -211,3 +220,17 @@ def apply_criteria(st: dict, s: dict) -> tuple[bool, list[str], list[str], str |
     if st["options_share"] >= float(s["options_heavy_share"]):
         flags.append(f"options-heavy ({st['options_share']:.0%} of trades)")
     return not fails, fails, flags, exception
+
+
+def member_performance_points(st: dict, sc: dict) -> tuple[float, float]:
+    """Score points for a member's past copy-trade performance (score mode). Uses the DELAY-ADJUSTED excess vs SPY
+    (entries at filing-date prices: what a follower could actually have captured), shrunk toward zero for members
+    with few buys: shrunk = excess * n / (n + k). Points = max * clip(shrunk / full, -1, 1), so trailing SPY costs
+    points symmetrically. No priced buys -> 0 points. Returns (points, shrunk_excess)."""
+    ex, n = st.get("excess_1y_delay"), st.get("n_buys") or 0
+    if ex is None or pd.isna(ex) or n <= 0:
+        return 0.0, np.nan
+    k = float(sc["member_performance_shrink_buys"])
+    shrunk = float(ex) * n / (n + k)
+    pts = float(sc["member_performance_max"]) * float(np.clip(shrunk / float(sc["member_performance_full"]), -1, 1))
+    return pts, shrunk

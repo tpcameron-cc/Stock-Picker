@@ -25,6 +25,11 @@ Thresholds: `config/settings.yaml` under `regime:` and `orchestrator:`.
    - **Regime first**: say whether it's strong / neutral / weak and what that changed (threshold raise, size cut).
    - Scanner status table: report any scanner that FAILED or produced no fresh output, with its log
      (`data/logs/<skill>.log`).
+   - **Score calibration**: ideas are ranked by *priority*, a common scale (`core/calibrate.py`): the score's
+     percentile within its own skill's past journal scores (blended with the skill's [min_score, 100] range while
+     history is short) + the skill's realized paper expectancy (0 until ideas close, shrunk) ± confluence /
+     conflicts. Raw skill scores are not comparable; admission still uses each skill's own scale. Quote priority
+     with its percentile and raw score, never compare raw scores across skills.
    - Top 10 ideas (5 in quick mode): thesis, plan, size, key dates, conflicts, flags, sources.
    - A section per skill and the rejected list with reasons. Ideas blocked by the political **sell blacklist**
      show as `blacklisted until <date>: <member> sold ...`; mention them.
@@ -33,7 +38,8 @@ Thresholds: `config/settings.yaml` under `regime:` and `orchestrator:`.
 4. Mention how many ideas were logged to the journal and suggest `review-performance` weekly.
 
 ## Output
-- `reports/YYYY-MM-DD.md` and `reports/YYYY-MM-DD.csv` (one row per ticker: skills, score, approved, shares,
+- `reports/YYYY-MM-DD.md` and `reports/YYYY-MM-DD.csv` (one row per ticker: skills, priority, raw merged score,
+  percentile, edge points, approved, shares,
   notional, risk $, plan, conflicts, sizing reasons, regime).
 - Journal: every skill's idea is logged (taken = 1 only for the approved, sized primary idea).
 

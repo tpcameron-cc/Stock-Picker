@@ -11,7 +11,7 @@ from core.providers.house_disclosures import parse_amount, parse_ptr_text
 from core.providers.usaspending import core_name, recipient_matches
 from scanners.political.oversight import Oversight, classify
 from scanners.political.score import score_purchase
-from scanners.political.screen import apply_criteria, copy_trade
+from scanners.political.screen import apply_criteria, copy_trade, member_performance_points
 
 
 @pytest.fixture
@@ -159,12 +159,12 @@ def stats(**over):
 
 def test_criteria(P):
     S = P["screen"]
-    assert apply_criteria(stats(), S)[0]
+    assert apply_criteria(stats(), S, "gate")[0]
     for over, msg in [({"excess_1y": -0.02}, "trails SPY"), ({"reliability_gap_pp": 9.0}, "unreliable"),
                       ({"n_trades": 4}, "trades"), ({"excess_ex_best": -0.01}, "only because of NVDA"),
                       ({"median_filing_delay": 40.0}, "median filing delay"), ({"late_share": 0.5}, "chronic late"),
                       ({"est_portfolio": 2e5, "est_portfolio_high": 4e5, "excess_1y": 0.05}, "portfolio")]:
-        ok, fails, *_ = apply_criteria(stats(**over), S)
+        ok, fails, *_ = apply_criteria(stats(**over), S, "gate")
         assert not ok and any(msg in f for f in fails), over
     ok, _, flags, exc = apply_criteria(stats(est_portfolio=9e5, est_portfolio_low=5e5, est_portfolio_high=1.4e6), S)
     assert ok and any("borderline" in f for f in flags) and exc is None
@@ -174,6 +174,42 @@ def test_criteria(P):
     assert ok and "unusual allocation" in exc
     _, _, flags, _ = apply_criteria(stats(managed_or_blind=True, options_share=0.5), S)
     assert any("blind trust" in f for f in flags) and any("options-heavy" in f for f in flags)
+
+
+def test_score_mode_turns_performance_fails_into_flags(P):
+    S = P["screen"]
+    for over, msg in [({"excess_1y": -0.02}, "trails SPY"), ({"excess_ex_best": -0.01}, "only because of NVDA")]:
+        ok, fails, flags, _ = apply_criteria(stats(**over), S, "score")
+        assert ok and not fails and any(msg in f for f in flags), over
+    for over, msg in [({"reliability_gap_pp": 9.0}, "unreliable"), ({"n_trades": 4}, "trades"),
+                      ({"late_share": 0.5}, "chronic late"), ({"excess_1y": np.nan}, "no priced stock purchases")]:
+        ok, fails, *_ = apply_criteria(stats(**over), S, "score")
+        assert not ok and any(msg in f for f in fails), over
+    with pytest.raises(ValueError):
+        apply_criteria(stats(), S, "vibes")
+
+
+def test_member_performance_points_shrink_and_clip(P):
+    sc = {**P["scoring"], "member_performance_max": 10, "member_performance_full": 0.10,
+          "member_performance_shrink_buys": 20}
+    pts, shrunk = member_performance_points({"excess_1y_delay": 0.20, "n_buys": 20}, sc)
+    assert shrunk == pytest.approx(0.10) and pts == pytest.approx(10)
+    pts, shrunk = member_performance_points({"excess_1y_delay": 0.20, "n_buys": 5}, sc)   # few buys: shrunk hard
+    assert shrunk == pytest.approx(0.04) and pts == pytest.approx(4)
+    assert member_performance_points({"excess_1y_delay": -0.50, "n_buys": 100}, sc)[0] == pytest.approx(-10)
+    assert member_performance_points({"excess_1y_delay": np.nan, "n_buys": 10}, sc)[0] == 0
+
+
+def test_blacklist_member_rule_is_independent_of_screen_mode():
+    from scanners.political.scan import blacklist_members
+    screen = pd.DataFrame({"bioguide": ["A", "B", "C"], "qualified": [True, True, False],
+                           "qualified_beat_spy": [True, False, False]})
+    tx = pd.DataFrame({"bioguide": ["A", "B", "C", "D", None]})
+    assert blacklist_members(screen, tx, "qualified_beat_spy") == {"A"}
+    assert blacklist_members(screen, tx, "qualified") == {"A", "B"}
+    assert blacklist_members(screen, tx, "all") == {"A", "B", "C", "D"}
+    with pytest.raises(ValueError):
+        blacklist_members(screen, tx, "everyone")
 
 
 # ---------------- classification, timing, score ----------------
@@ -210,6 +246,8 @@ def test_score(P):
     assert parts["late_filing"] == -10 and parts["price_move"] == pytest.approx(-15)
     assert parts["recency"] == pytest.approx(5)
     assert score_purchase("none", 0, 0, 100, 0, None, False, sc, lb, md)[0] == 0
+    s2, parts = score_purchase("direct", 3, 250000, 10, 10, 0.05, True, sc, lb, md, member_performance=-6)
+    assert parts["member_performance"] == -6 and s2 == pytest.approx(best - 6)
 
 
 # ---------------- Form 4, recipient names ----------------

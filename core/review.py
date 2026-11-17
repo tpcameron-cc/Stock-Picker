@@ -17,11 +17,26 @@ import numpy as np
 import pandas as pd
 
 from core import journal
+from core.calibrate import SKILL_MIN_SCORE_KEY   # where each skill's threshold lives (suggestions only)
 from core.config import Settings, settings as default_settings
 
-# Where each skill's score threshold lives (for suggestions only; nothing here edits settings).
-SKILL_MIN_SCORE_KEY = {"breakout-scanner": "breakout.scoring.min_score", "catalyst-plays": "catalyst.scoring.min_score",
-                       "political-edge": "political.scoring.min_score", "momentum-hype": "hype.min_score"}
+
+def score_check(closed: pd.DataFrame, min_n: int) -> pd.DataFrame:
+    """Within each skill: do higher scores actually do better? Rank correlation of score vs realized R, and the
+    expectancy of the top vs bottom half by score. run-all-scans ranks ideas by their percentile within their own
+    skill, which only makes sense if this correlation is positive."""
+    rows = {}
+    for sk, g in closed.dropna(subset=["score", "r_multiple"]).groupby("skill"):
+        n = len(g)
+        rho = float(np.corrcoef(g["score"].rank(), g["r_multiple"].rank())[0, 1]) if n >= 3 and g["score"].nunique() > 1 else np.nan
+        med = g["score"].median()
+        rows[sk] = {"n": n, "rho": rho, "top_half_r": g.loc[g["score"] > med, "r_multiple"].mean(),
+                    "bottom_half_r": g.loc[g["score"] <= med, "r_multiple"].mean(),
+                    "verdict": (f"too early ({n} closed; need {min_n})" if n < min_n else
+                                "higher scores did better" if rho > 0.1 else
+                                "higher scores did WORSE: score is mis-ranking this skill" if rho < -0.1 else
+                                "score doesn't separate outcomes")}
+    return pd.DataFrame(rows).T
 
 
 def bootstrap_ci(r: pd.Series, samples: int, seed: int = 0, level: float = 0.90) -> tuple[float, float]:
@@ -120,6 +135,7 @@ def write_report(cfg, today, t, closed_all, closed_taken, perf, skills, sugg, up
          f"- Status: " + (", ".join(f"{k} {v}" for k, v in t["status"].value_counts().items()) if len(t) else "empty"),
          f"- Closed: {len(closed_all)} ({len(closed_taken)} taken, {len(closed_all) - len(closed_taken)} rejected-but-tracked)",
          ""]
+    sc = score_check(closed_all, int(rv["min_closed_trades"])) if len(closed_all) else pd.DataFrame()
     L += ["## Verdict by skill", ""]
     if len(skills):
         L += ["| Skill | Closed | Win rate | Avg win | Avg loss | Expectancy | 90% CI | vs SPY | Verdict |", "|---|---|---|---|---|---|---|---|---|"]
@@ -132,6 +148,14 @@ def write_report(cfg, today, t, closed_all, closed_taken, perf, skills, sugg, up
     pending = sorted(set(t["skill"]) - set(skills.index)) if len(t) else []
     if pending:
         L.append(f"\nSkills with ideas but no closed trades yet: {', '.join(pending)}.")
+    if len(sc):
+        L += ["", "## Does the score rank ideas within each skill?", "",
+              "_run-all-scans ranks ideas by percentile within their own skill; that's only fair if higher scores do better._",
+              "", "| Skill | Closed | Rank corr (score vs R) | Top-half expectancy | Bottom-half expectancy | Verdict |",
+              "|---|---|---|---|---|---|"]
+        for sk, r in sc.iterrows():
+            rho = "—" if pd.isna(r["rho"]) else f"{r['rho']:+.2f}"
+            L.append(f"| {sk} | {int(r['n'])} | {rho} | {_r(r['top_half_r'])} | {_r(r['bottom_half_r'])} | {r['verdict']} |")
     for name, title in [("by_signal", "By signal type"), ("by_setup", "By setup")]:
         df = perf.get(name)
         if df is not None and len(df):

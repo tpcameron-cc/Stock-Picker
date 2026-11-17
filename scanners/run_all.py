@@ -24,6 +24,7 @@ from pathlib import Path
 import pandas as pd
 
 from core import journal
+from core.calibrate import Calibrator
 from core.config import PROJECT_ROOT, Settings, settings as default_settings
 from core.providers.base import STALE_OK_ENV
 from core.regime import Regime, current_regime
@@ -47,7 +48,9 @@ class Idea:
     ticker: str
     primary: Signal
     contributors: list[Signal]
-    score: float
+    score: float                    # merged score on the primary skill's OWN scale: used only for the admission gate
+    priority: float = 0.0           # common-scale score (core.calibrate): used for ranking and sizing order
+    calib: dict = field(default_factory=dict)
     conflicts: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     rejected: str | None = None
@@ -152,8 +155,12 @@ def conflict_context(cfg: Settings, day: date, tickers: set[str], edgar) -> dict
 # Merge (pure)
 # ---------------------------------------------------------------------------
 
-def merge_ideas(sigs: dict[str, list[Signal]], ctx: dict, regime: Regime, cfg: Settings, asof: date) -> list[Idea]:
+def merge_ideas(sigs: dict[str, list[Signal]], ctx: dict, regime: Regime, cfg: Settings, asof: date,
+                calib: Calibrator | None = None) -> list[Idea]:
+    """Raw scores aren't comparable across skills, so ideas are ORDERED on the common scale (`calib`; without one,
+    each skill's position in its own admissible range) and ADMITTED on the primary skill's own scale."""
     o = cfg.section("orchestrator")
+    calib = calib or Calibrator.from_journal(cfg, None, asof)
     by_ticker: dict[str, list[Signal]] = {}
     for sk, lst in sigs.items():
         for s in lst:
@@ -166,10 +173,13 @@ def merge_ideas(sigs: dict[str, list[Signal]], ctx: dict, regime: Regime, cfg: S
     threshold = float(o["min_score"]) + regime.min_score_add
     ideas = []
     for t, group in by_ticker.items():
-        group = sorted(group, key=lambda s: s.score, reverse=True)
+        common = {id(s): calib.common(s.skill, s.score) for s in group}
+        group = sorted(group, key=lambda s: common[id(s)][0], reverse=True)
         primary = group[0]
         skills = list(dict.fromkeys(s.skill for s in group))
-        idea = Idea(t, primary, group, primary.score + float(o["confluence_bonus"]) * (len(skills) - 1))
+        bonus = float(o["confluence_bonus"]) * (len(skills) - 1)
+        idea = Idea(t, primary, group, primary.score + bonus, priority=common[id(primary)][0] + bonus,
+                    calib=common[id(primary)][1])
         if len(skills) > 1:
             idea.notes.append(f"confluence: flagged by {', '.join(skills)} (+{float(o['confluence_bonus']) * (len(skills) - 1):g})")
         ed = ctx["earnings"].get(t)
@@ -186,6 +196,7 @@ def merge_ideas(sigs: dict[str, list[Signal]], ctx: dict, regime: Regime, cfg: S
             elif ctx["insider_sells"].get(t, 0) > 0:
                 idea.conflicts.append(f"hype with insider selling: {ctx['insider_sells'][t]} Form 4 sales in 30 days")
         idea.score = min(100.0, idea.score - float(o["conflict_penalty"]) * len(idea.conflicts))
+        idea.priority -= float(o["conflict_penalty"]) * len(idea.conflicts)
         bl = (ctx.get("blacklist") or {}).get(t)
         if bl:
             from scanners.political.blacklist import reason as bl_reason
@@ -193,19 +204,23 @@ def merge_ideas(sigs: dict[str, list[Signal]], ctx: dict, regime: Regime, cfg: S
         elif idea.score < threshold:
             idea.rejected = f"score {idea.score:.1f} < {threshold:g} (min {o['min_score']} + regime {regime.min_score_add:g})"
         ideas.append(idea)
-    return sorted(ideas, key=lambda i: i.score, reverse=True)
+    return sorted(ideas, key=lambda i: i.priority, reverse=True)
 
 
 def merged_signal(idea: Idea) -> Signal:
-    """The primary signal with the merged score, union of signals and the extra context in its flags."""
+    """The primary signal with the common-scale priority as its score (so risk-and-sizing fills its limited slots in
+    the fairest order), union of signals and the extra context in its flags. Each skill's raw score stays in the
+    journal and in metrics.raw_score."""
     p = idea.primary
     others = [s for s in idea.contributors[1:] if s.skill != p.skill]
     thesis = p.thesis + "".join(f" Also {s.skill}: {s.thesis.split('. ')[0].rstrip('.')}." for s in others)
     return p.model_copy(update={
-        "score": max(0.0, min(100.0, idea.score)), "thesis": thesis,
+        "score": max(0.0, min(100.0, idea.priority)), "thesis": thesis,
         "signals_hit": list(dict.fromkeys(h for s in idea.contributors for h in s.signals_hit)),
         "risk_flags": [f"CONFLICT: {c}" for c in idea.conflicts] + idea.notes + p.risk_flags,
-        "metrics": {**p.metrics, "skills": ", ".join(idea.skills)}})
+        "metrics": {**p.metrics, "skills": ", ".join(idea.skills), "raw_score": round(p.score, 1),
+                    "merged_raw_score": round(idea.score, 1), **{f"calib_{k}": v for k, v in idea.calib.items()
+                                                                 if k != "raw"}}})
 
 
 # ---------------------------------------------------------------------------
@@ -242,11 +257,12 @@ def run(cfg: Settings | None = None, skills: list[str] | None = None, quick: boo
     ctx = conflict_context(cfg, today, hype_tickers, edgar)
     asof = max((date.fromisoformat(s.metrics["price_as_of"]) for lst in sigs.values() for s in lst
                 if s.metrics.get("price_as_of")), default=today)
-    ideas = merge_ideas(sigs, ctx, regime, cfg, asof)
+    jpath = journal.db_path(cfg)
+    journal.update_outcomes(jpath, prov, cfg)          # fresh outcomes first: the calibration reads them
+    calib = Calibrator.from_journal(cfg, journal.read(jpath), asof)
+    ideas = merge_ideas(sigs, ctx, regime, cfg, asof, calib)
 
     # Size the surviving ideas against the journal's book, with the regime multiplier.
-    jpath = journal.db_path(cfg)
-    journal.update_outcomes(jpath, prov, cfg)
     book = journal.open_positions(jpath)
     # An idea identical to one already TAKEN in the journal (same price date, ticker, skill) is the same paper trade
     # re-scanned: keep its original size, don't re-size it; it stays in the book and counts against the limits.
@@ -291,7 +307,7 @@ def run(cfg: Settings | None = None, skills: list[str] | None = None, quick: boo
         logged = journal.log_signals(jpath, all_sigs, per_signal,
                                      log_rejected=bool(cfg.get("journal.log_rejected", True)))
 
-    paths = write_report(cfg, today, regime, ideas, sigs, status, runs, quick, logged, asof)
+    paths = write_report(cfg, today, regime, ideas, sigs, status, runs, quick, logged, asof, calib)
     return {"regime": regime, "ideas": ideas, "status": status, "runs": runs, "logged": logged, "paths": paths}
 
 
@@ -299,7 +315,16 @@ def run(cfg: Settings | None = None, skills: list[str] | None = None, quick: boo
 # Report
 # ---------------------------------------------------------------------------
 
-def write_report(cfg, today, regime: Regime, ideas: list[Idea], sigs, status, runs, quick, logged, asof) -> dict:
+def _score_text(i: Idea) -> str:
+    c = i.calib
+    if "percentile" not in c:
+        return f"score {i.priority:.0f}"
+    return (f"priority {i.priority:.0f}: {c['percentile']:.0f}th pct of {i.primary.skill} (raw {c['raw']:.0f})"
+            + (f", edge {c['edge_points']:+.0f}" if c.get("edge_points") else ""))
+
+
+def write_report(cfg, today, regime: Regime, ideas: list[Idea], sigs, status, runs, quick, logged, asof,
+                 calib: Calibrator | None = None) -> dict:
     o = cfg.section("orchestrator")
     top_n = int(o["quick_top_n"] if quick else o["top_n"])
     out = cfg.path_for("paths.reports_dir")
@@ -321,6 +346,12 @@ def write_report(cfg, today, regime: Regime, ideas: list[Idea], sigs, status, ru
           f"**{len(approved)} approved by risk-and-sizing**. Journal: {logged['inserted']} logged, "
           f"{logged['skipped_duplicates']} already present.", ""]
 
+    if calib is not None and calib.enabled:
+        L += ["## Score calibration", "",
+              "_Skills score on different point systems, so ideas are ranked by **priority**: the idea's percentile "
+              "within its own skill's past scores (blended with its admissible range while history is short), plus "
+              "the skill's realized paper expectancy once ideas close, ± confluence / conflicts. Admission still uses "
+              "each skill's own scale._", ""] + [f"- {x}" for x in calib.describe()] + [""]
     L += [f"## Top {top_n} ideas", ""]
     ranked = [i for i in ideas if not i.rejected][:top_n]
     if not ranked:
@@ -331,7 +362,7 @@ def write_report(cfg, today, regime: Regime, ideas: list[Idea], sigs, status, ru
                 else f"**{d.shares} shares** (${d.notional:,.0f}, risk ${d.risk_usd:,.0f} = {d.risk_pct_of_account:.2%} of account)"
                 if d and d.approved and d.shares is not None else
                 ("approved (account size not set)" if d and d.approved else f"not taken: {'; '.join(d.reasons) if d else 'not sized'}"))
-        L += [f"### {n}. {i.ticker} — {s.company}  (score {s.score:.0f}, {s.confidence.value}; {', '.join(i.skills)})", "",
+        L += [f"### {n}. {i.ticker} — {s.company}  ({_score_text(i)}; {s.confidence.value}; {', '.join(i.skills)})", "",
               s.thesis, "",
               f"- **Plan:** entry {s.entry_zone.low:.2f}–{s.entry_zone.high:.2f}, stop {s.stop:.2f}, target(s) "
               f"{', '.join(f'{x:.2f}' for x in s.targets)}, horizon {s.horizon_days}d, R:R {s.reward_risk:.2f}",
@@ -354,19 +385,19 @@ def write_report(cfg, today, regime: Regime, ideas: list[Idea], sigs, status, ru
         if not lst:
             L += [f"_{status.get(sk)}_" if status.get(sk) != "ok" else "_No ideas._", ""]
             continue
-        L += ["| Ticker | Score | Setup | Merged score | Outcome |", "|---|---|---|---|---|"]
+        L += ["| Ticker | Score | Setup | Merged score | Priority | Outcome |", "|---|---|---|---|---|---|"]
         imap = {i.ticker: i for i in ideas}
         for s in sorted(lst, key=lambda x: x.score, reverse=True):
             i = imap[s.ticker]
             outcome = i.rejected or ("approved" if i.decision and i.decision.approved and s is i.primary
                                      else f"via {i.primary.skill}" if s is not i.primary
                                      else "; ".join(i.decision.reasons) if i.decision else "—")
-            L.append(f"| {s.ticker} | {s.score:.0f} | {s.metrics.get('setup', '')} | {i.score:.0f} | {outcome} |")
+            L.append(f"| {s.ticker} | {s.score:.0f} | {s.metrics.get('setup', '')} | {i.score:.0f} | {i.priority:.0f} | {outcome} |")
         L.append("")
 
     rej = [i for i in ideas if i.rejected or (i.decision and not i.decision.approved)]
     if rej:
-        L += ["## Rejected", "", "| Ticker | Skills | Score | Reason |", "|---|---|---|---|"]
+        L += ["## Rejected", "", "| Ticker | Skills | Merged score | Reason |", "|---|---|---|---|"]
         for i in rej:
             why = i.rejected or "; ".join(i.decision.reasons)
             L.append(f"| {i.ticker} | {', '.join(i.skills)} | {i.score:.0f} | {why} |")
@@ -376,7 +407,9 @@ def write_report(cfg, today, regime: Regime, ideas: list[Idea], sigs, status, ru
     rows = []
     for i in ideas:
         s, d = merged_signal(i), i.decision
-        rows.append({"ticker": i.ticker, "company": s.company, "skills": ", ".join(i.skills), "score": round(i.score, 1),
+        rows.append({"ticker": i.ticker, "company": s.company, "skills": ", ".join(i.skills),
+                     "priority": round(i.priority, 1), "score": round(i.score, 1),
+                     "percentile": i.calib.get("percentile"), "edge_points": i.calib.get("edge_points"),
                      "confidence": s.confidence.value, "rejected": i.rejected, "approved": bool(d and d.approved),
                      "shares": d.shares if d else None, "notional": d.notional if d else None,
                      "risk_usd": d.risk_usd if d else None, "entry_low": s.entry_zone.low, "entry_high": s.entry_zone.high,
@@ -405,7 +438,7 @@ def main(argv: list[str] | None = None) -> None:
           f"{sum(1 for i in ok if i.decision and i.decision.approved)} approved -> {res['paths']['md']}")
     for i in ok[:10]:
         d = i.decision
-        print(f"  {i.ticker:<6} {i.score:5.1f} {', '.join(i.skills):<35} "
+        print(f"  {i.ticker:<6} {i.priority:5.1f} (raw {i.score:4.0f}) {', '.join(i.skills):<35} "
               + (f"{d.shares} sh" if d and d.approved and d.shares is not None else ("approved" if d and d.approved else
                  f"no: {'; '.join(d.reasons)[:60]}" if d else "")))
     print(f"Journal: {res['logged']}")
