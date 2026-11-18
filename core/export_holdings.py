@@ -41,7 +41,7 @@ def build_rows(t: pd.DataFrame, hist: dict, sectors: dict, account: float | None
             "skill": r.skill, "setup": r.setup, "status": "filled" if filled else "waiting for entry",
             "signal_date": r.signal_date, "logged": str(r.logged_at)[:10], "shares": shares,
             "entry_low": _num(r.entry_low, 2), "entry_high": _num(r.entry_high, 2), "stop": _num(r.stop, 2),
-            "target": _num(r.target, 2), "fill_date": r.fill_date, "fill_price": _num(r.fill_price, 2),
+            "target": _num(r.target, 2), "fill_date": r.fill_date if pd.notna(r.fill_date) else None, "fill_price": _num(r.fill_price, 2),
             "last_price": _num(last, 2), "last_price_date": last_date, "position_value": _num(value, 2),
             "risk_usd": _num(risk_per_share * shares, 2), "planned_risk_usd": _num(r.risk_usd, 2),
             "risk_pct_of_account": _num(risk_per_share * shares / account, 5) if account else None,
@@ -76,7 +76,7 @@ def main() -> None:
         {"label": "Input", "value": "data/journal.sqlite (paper_trades, taken = 1, pending or open), Yahoo daily closes"},
         {"label": "Exported", "value": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")},
     ]
-    out.write_text(json.dumps({"rows": rows, "meta": meta}, indent=1), encoding="utf-8")
+    out.write_text(json.dumps({"rows": rows, "meta": meta}, indent=1, allow_nan=False), encoding="utf-8")
     print(f"{len(rows)} holdings -> {out}")
 
 
